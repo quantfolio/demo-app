@@ -1,0 +1,12 @@
+{
+  "name": "api-scratchpad",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "oauth2-mock-server": "^8.2.2"
+  }
+}
