@@ -8,3 +8,4 @@ bun.lockb
 .env.*.local
 *.pdf
 *.json
+data/
