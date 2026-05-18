@@ -346,19 +346,42 @@ interface WebhookEvent {
 }
 
 async function fetchSessionBundle(sessionId: string) {
-    const [session, adviceInformation, goals, transactions] = await Promise.all([
-        client.getAdviceSession(sessionId),
-        client.getAdviceInformation(sessionId),
-        client.listAdviceGoals(sessionId),
-        client.getAdviceTransactions(sessionId),
-    ]);
+    const getAdviceSessionRes = await client.getAdviceSession(sessionId);
+    recordSessionCall(
+        sessionId,
+        "GET /v2/advice_session/{session_id}",
+        { sessionId },
+        getAdviceSessionRes,
+    );
 
-    // Goals list response shape isn't typed; pull out any id-like field
-    // and fetch per-goal details.
-    const goalItems: unknown[] = Array.isArray(goals)
-        ? goals
-        : (goals as { data?: unknown[]; goals?: unknown[] })?.data
-          ?? (goals as { data?: unknown[]; goals?: unknown[] })?.goals
+    const getAdviceInformationRes = await client.getAdviceInformation(sessionId);
+    recordSessionCall(
+        sessionId,
+        "GET /v2/advice_session/{session_id}/advice_information",
+        { sessionId },
+        getAdviceInformationRes,
+    );
+
+    const listAdviceGoalsRes = await client.listAdviceGoals(sessionId);
+    recordSessionCall(
+        sessionId,
+        "GET /v2/advice_session/{session_id}/goal",
+        { sessionId },
+        listAdviceGoalsRes,
+    );
+
+    const getAdviceTransactionsRes = await client.getAdviceTransactions(sessionId);
+    recordSessionCall(
+        sessionId,
+        "GET /v2/advice_session/{session_id}/transactions",
+        { sessionId },
+        getAdviceTransactionsRes,
+    );
+
+    const goalItems: unknown[] = Array.isArray(listAdviceGoalsRes)
+        ? listAdviceGoalsRes
+        : (listAdviceGoalsRes as { data?: unknown[]; goals?: unknown[] })?.data
+          ?? (listAdviceGoalsRes as { data?: unknown[]; goals?: unknown[] })?.goals
           ?? [];
     const goalIds = goalItems
         .map((g) => {
@@ -368,26 +391,42 @@ async function fetchSessionBundle(sessionId: string) {
         .filter((id): id is string => typeof id === "string" && id.length > 0);
 
     const goalDetails = await Promise.all(
-        goalIds.map(async (goalId) => ({
-            goal_id: goalId,
-            detail: await client.getAdviceGoal(sessionId, goalId),
-        })),
+        goalIds.map(async (goalId) => {
+            const detail = await client.getAdviceGoal(sessionId, goalId);
+            recordSessionCall(
+                sessionId,
+                "GET /v2/advice_session/{session_id}/goal/{goal_id}",
+                { sessionId, goalId },
+                detail,
+            );
+            return { goal_id: goalId, detail };
+        }),
     );
 
-    return { session, advice_information: adviceInformation, goals, goal_details: goalDetails, transactions };
+    return {
+        session: getAdviceSessionRes,
+        advice_information: getAdviceInformationRes,
+        goals: listAdviceGoalsRes,
+        goal_details: goalDetails,
+        transactions: getAdviceTransactionsRes,
+    };
 }
 
 async function handleSessionCompleted(sessionId: string, investorId: string) {
     console.log(`[listener] session.completed session_id=${sessionId} investor_id=${investorId}`);
 
-    const bundle = await fetchSessionBundle(sessionId);
-    const jsonPath = `session_${sessionId}_data.json`;
-    await Bun.write(jsonPath, JSON.stringify(bundle, null, 2));
-    console.log(`[listener] saved ${jsonPath}`);
+    await fetchSessionBundle(sessionId);
 
     const reportMeta = (await client.getReport(investorId, sessionId)) as {
         data?: Array<{ documentId?: string; documentType?: string }>;
     };
+    recordSessionCall(
+        sessionId,
+        "GET /v1/report/{investor_id}/{session_id}",
+        { investorId, sessionId },
+        reportMeta,
+    );
+
     const files = (reportMeta.data ?? [])
         .filter((f) => typeof f.documentId === "string" && typeof f.documentType === "string")
         .map((f) => ({ documentId: f.documentId!, documentType: f.documentType! }));
@@ -395,10 +434,19 @@ async function handleSessionCompleted(sessionId: string, investorId: string) {
         console.warn(`[listener] no report files for session ${sessionId}; skipping PDF`);
         return;
     }
+
+    const downloadReq = { investorId, sessionId, files };
     const pdfRes = await client.downloadReportPdf(investorId, sessionId, { files });
     const pdfPath = `session_${sessionId}.pdf`;
     await Bun.write(pdfPath, pdfRes);
-    console.log(`[listener] saved ${pdfPath}`);
+    const sizeBytes = Bun.file(pdfPath).size;
+    recordSessionCall(
+        sessionId,
+        "POST /v1/report/{investor_id}/{session_id}/download",
+        downloadReq,
+        { path: pdfPath, size_bytes: sizeBytes },
+    );
+    console.log(`[listener] saved ${pdfPath} (${sizeBytes} bytes)`);
 }
 
 async function handleListener(req: Request): Promise<Response> {
