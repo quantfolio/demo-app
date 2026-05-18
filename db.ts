@@ -47,6 +47,51 @@ const insertOther = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?)
 `);
 
+const selectSessionsForInvestorEmail = db.prepare(`
+  SELECT
+    json_extract(s.response_body, '$.session_id') AS session_id,
+    EXISTS (
+      SELECT 1 FROM session_api_calls c
+      WHERE c.session_id = json_extract(s.response_body, '$.session_id')
+    ) AS completed
+  FROM other_api_calls s
+  WHERE s.api_endpoint = 'POST /v1/state_session'
+    AND s.advisor_id = ?
+    AND json_extract(s.response_body, '$.session_id') IS NOT NULL
+    AND s.investor_id IN (
+      SELECT json_extract(response_body, '$.id')
+      FROM other_api_calls
+      WHERE api_endpoint = 'POST /v1/investor'
+        AND advisor_id = ?
+        AND json_extract(request_body, '$.email') = ?
+    )
+  ORDER BY s.id DESC
+`);
+
+export interface InvestorSessionRow {
+  session_id: string;
+  completed: boolean;
+}
+
+export function listSessionsForInvestorEmail(
+  advisorId: string,
+  email: string,
+): InvestorSessionRow[] {
+  try {
+    const rows = selectSessionsForInvestorEmail.all(advisorId, advisorId, email) as Array<{
+      session_id: string;
+      completed: number;
+    }>;
+    return rows.map((r) => ({
+      session_id: r.session_id,
+      completed: r.completed === 1,
+    }));
+  } catch (e) {
+    console.error("[db] listSessionsForInvestorEmail failed:", e);
+    return [];
+  }
+}
+
 function stringifyOrNull(value: unknown): string | null {
   if (value === undefined) return null;
   return JSON.stringify(value);
