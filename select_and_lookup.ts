@@ -1,6 +1,15 @@
+import { OAuth2Server } from "oauth2-mock-server";
 import { DeepAlphaClient, DeepAlphaApiError } from "./public_api/client.ts";
+import {
+    pickerPage,
+    resultPage,
+    type ImaginaryClient,
+    type ResultBlocks,
+} from "./templates.ts";
 
-const PORT = 9092;
+const PORT = 9090;
+const OAUTH_PORT = 9091;
+const PUBLIC_ISSUER_URL = Bun.env.PUBLIC_ISSUER_URL ?? `http://localhost:${PORT}`;
 const SESSION_HOST = "qf-employee-bjornar.test.deepalpha.dev";
 
 const CLIENT_ID = Bun.env.CLIENT_ID;
@@ -16,6 +25,7 @@ const USERS = [
     {
         sub: "quantfolio.fbae4e5d-9606-438a-814d-c49ecf0fd4b0",
         email: "bjornar@quantfol.io",
+        email_verified: true,
         name: "Bjørnar Mundal",
         preferred_username: "Bjornar",
         roles: ["admin"],
@@ -23,6 +33,7 @@ const USERS = [
     {
         sub: "quantfolio.a1b2c3d4-1234-5678-abcd-ef0123456789",
         email: "alice@quantfol.io",
+        email_verified: true,
         name: "Alice Andersen",
         preferred_username: "Alice",
         roles: ["advisor"],
@@ -30,17 +41,12 @@ const USERS = [
     {
         sub: "quantfolio.deadbeef-cafe-babe-feed-c0ffee123456",
         email: "bob@quantfol.io",
+        email_verified: true,
         name: "Bob Bergström",
         preferred_username: "Bob",
         roles: ["advisor"],
     },
 ];
-
-interface ImaginaryClient {
-    name: string;
-    email: string;
-    country: string;
-}
 
 const IMAGINARY_CLIENTS: ImaginaryClient[] = [
     { name: "Erik Larsen", email: "erik.larsen@example.com", country: "NO" },
@@ -50,85 +56,83 @@ const IMAGINARY_CLIENTS: ImaginaryClient[] = [
     { name: "Jan de Vries", email: "jan.devries@example.com", country: "NL" },
 ];
 
-const AVATAR_COLORS = ["#6366f1", "#10b981", "#f59e0b"];
-const BADGE_STYLES: Record<string, string> = {
-    admin: "background:#fef3c7;color:#92400e",
-    advisor: "background:#dbeafe;color:#1e40af",
-    viewer: "background:#f3f4f6;color:#374151",
-};
+const getUserByIndex = (idx: number) => USERS[idx] ?? USERS[0]!;
+const getUserBySub = (sub: string) => USERS.find(u => u.sub === sub) ?? USERS[0]!;
 
-const escapeHtml = (s: string) =>
-    s.replace(/[&<>"']/g, (c) =>
-        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
-    );
+const codeToUser = new Map<string, number>();
 
-const pickerPage = () => /* html */ `<!DOCTYPE html>
+// ── oauth2-mock-server ────────────────────────────────────────────────────────
+
+const server = new OAuth2Server();
+await server.issuer.keys.generate("RS256");
+server.issuer.url = PUBLIC_ISSUER_URL;
+
+server.service.on("beforeAuthorizeRedirect", (redirectUri: any, req: any) => {
+    const code = redirectUri.url?.searchParams?.get("code");
+    const idx = parseInt(req.query?.user ?? "0", 10);
+    if (code) codeToUser.set(code, idx);
+    console.log(`[auth] code ${code} → user[${idx}] ${getUserByIndex(idx).name}`);
+});
+
+server.service.on("beforeTokenSigning", (token: any, req: any) => {
+    const code = req.body?.code;
+    const idx = codeToUser.get(code) ?? 0;
+    const user = getUserByIndex(idx);
+    console.log(user);
+    console.log(`[token] signing for ${user.name}`);
+
+    Object.assign(token.payload, {
+        sub: user.sub,
+        email: user.email,
+        email_verified: user.email_verified,
+        name: user.name,
+        preferred_username: user.preferred_username,
+        roles: user.roles,
+    });
+});
+
+(server.service as any).on("beforeUserinfo", (res: any, req: any) => {
+    console.log("[userinfo] req.auth:", req.auth);
+    console.log("[userinfo] authorization header:", req.headers?.authorization);
+
+    let sub: string | undefined;
+    try {
+        const bearer = req.headers?.authorization?.replace("Bearer ", "");
+        if (bearer) {
+            const payload = JSON.parse(Buffer.from(bearer.split(".")[1], "base64url").toString());
+            sub = payload.sub;
+            console.log("[userinfo] decoded sub:", sub);
+        }
+    } catch (e) {
+        console.log("[userinfo] failed to decode token:", e);
+    }
+
+    const user = sub ? getUserBySub(sub) : getUserByIndex(0);
+    console.log("[userinfo] serving user:", user.name);
+
+    Object.assign(res.body, {
+        sub: user.sub,
+        email: user.email,
+        email_verified: user.email_verified,
+        name: user.name,
+        preferred_username: user.preferred_username,
+    });
+});
+
+await server.start(OAUTH_PORT, "localhost");
+
+// ── Mock SSO debug page ───────────────────────────────────────────────────────
+
+const debugPage = (tokens: any, decodedIdToken: any) => /* html */`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Select user — DeepAlpha lookup</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-       background:#f0f2f5;min-height:100vh;display:flex;align-items:center;justify-content:center}
-  .card{background:#fff;border-radius:14px;padding:36px 32px;width:420px;
-        box-shadow:0 4px 32px rgba(0,0,0,.1)}
-  .logo{text-align:center;font-size:36px;margin-bottom:8px}
-  h1{text-align:center;font-size:22px;color:#111;margin-bottom:4px}
-  .sub{text-align:center;font-size:14px;color:#999;margin-bottom:28px}
-  a.user{display:flex;align-items:center;gap:14px;padding:14px;border:1.5px solid #e5e7eb;
-         border-radius:10px;margin-bottom:10px;text-decoration:none;color:inherit;
-         transition:border-color .15s,background .15s}
-  a.user:hover{border-color:#6366f1;background:#fafafe}
-  .av{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;
-      justify-content:center;font-weight:700;font-size:19px;color:#fff;flex-shrink:0}
-  .info{flex:1}
-  .name{font-weight:600;font-size:15px;color:#111}
-  .email{font-size:12px;color:#999;margin-top:2px}
-  .badge{font-size:11px;font-weight:500;padding:3px 10px;border-radius:20px}
-  .note{text-align:center;font-size:11px;color:#ccc;margin-top:22px}
-</style>
-</head>
-<body>
-<div class="card">
-  <div class="logo">🔎</div>
-  <h1>Pick a user</h1>
-  <p class="sub">We'll look the email up via /v1/advisor and create an investor if missing.</p>
-  ${USERS.map(
-      (u, i) => `
-  <a class="user" href="/pick?user=${i}">
-    <div class="av" style="background:${AVATAR_COLORS[i]}">${escapeHtml(u.preferred_username[0]!)}</div>
-    <div class="info">
-      <div class="name">${escapeHtml(u.name)}</div>
-      <div class="email">${escapeHtml(u.email)}</div>
-    </div>
-    <span class="badge" style="${BADGE_STYLES[u.roles[0]!] ?? ""}">${escapeHtml(u.roles[0]!)}</span>
-  </a>`,
-  ).join("")}
-  <p class="note">Server-to-server auth via /v1/auth/token (client_credentials)</p>
-</div>
-</body>
-</html>`;
-
-interface ResultBlocks {
-    user: { sub: string; email: string; name: string };
-    advisorLookup: unknown;
-    advisorId?: string;
-    clients?: ImaginaryClient[];
-    investorCreated?: unknown;
-    error?: { status?: number; message: string; body?: unknown };
-}
-
-const resultPage = (r: ResultBlocks) => /* html */ `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Result — DeepAlpha lookup</title>
+<title>Mock SSO — Debug</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
        background:#f0f2f5;min-height:100vh;padding:32px;color:#111}
-  .card{background:#fff;border-radius:14px;padding:32px;max-width:880px;margin:0 auto;
+  .card{background:#fff;border-radius:14px;padding:32px;max-width:820px;margin:0 auto;
         box-shadow:0 4px 32px rgba(0,0,0,.1)}
   h1{font-size:22px;margin-bottom:6px}
   .sub{font-size:13px;color:#999;margin-bottom:20px}
@@ -136,110 +140,22 @@ const resultPage = (r: ResultBlocks) => /* html */ `<!DOCTYPE html>
      margin:18px 0 8px}
   pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:14px;
       font-size:12px;line-height:1.55;overflow:auto;word-break:break-all;white-space:pre-wrap}
-  .err pre{background:#7f1d1d;color:#fee2e2}
-  a.back{display:inline-block;margin-top:18px;font-size:13px;color:#6366f1;text-decoration:none}
-  a.back:hover{text-decoration:underline}
-  .pill{display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-        font-size:12px;background:#eef2ff;color:#4338ca;padding:3px 8px;border-radius:6px}
-  table.clients{width:100%;border-collapse:collapse;margin-top:6px}
-  table.clients th,table.clients td{text-align:left;padding:10px 12px;
-        border-bottom:1px solid #e5e7eb;font-size:14px}
-  table.clients th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;font-weight:600}
-  table.clients tr:last-child td{border-bottom:none}
-  button.session{background:#6366f1;color:#fff;border:none;border-radius:6px;
-        padding:7px 12px;font-size:13px;font-weight:500;cursor:pointer}
-  button.session:hover{background:#4f46e5}
 </style>
 </head>
 <body>
 <div class="card">
-  <h1>${r.error ? "⚠️ Error" : "✅ Lookup complete"}</h1>
-  <p class="sub">DeepAlpha test tenant · ${escapeHtml(new Date().toISOString())}</p>
-
-  <h2>Picked user</h2>
-  <pre>${escapeHtml(JSON.stringify(r.user, null, 2))}</pre>
-
-  ${r.error ? `
-    <div class="err">
-      <h2>Error</h2>
-      <pre>${escapeHtml(JSON.stringify(r.error, null, 2))}</pre>
-    </div>` : ""}
-
-  <h2>Advisor lookup (GET /v1/advisor?email=…)</h2>
-  <pre>${escapeHtml(JSON.stringify(r.advisorLookup, null, 2))}</pre>
-
-  ${r.advisorId ? `
-    <h2>Saved advisor_id</h2>
-    <p><span class="pill">${escapeHtml(r.advisorId)}</span></p>` : ""}
-
-  ${r.clients ? `
-    <h2>Clients</h2>
-    <table class="clients" data-advisor-id="${escapeHtml(r.advisorId ?? "")}">
-      <thead><tr><th>Name</th><th>Email</th><th>Country</th><th></th></tr></thead>
-      <tbody>
-        ${r.clients.map((c) => `
-          <tr data-name="${escapeHtml(c.name)}" data-email="${escapeHtml(c.email)}" data-country="${escapeHtml(c.country)}">
-            <td>${escapeHtml(c.name)}</td>
-            <td>${escapeHtml(c.email)}</td>
-            <td>${escapeHtml(c.country)}</td>
-            <td><button class="session" type="button">Create session</button></td>
-          </tr>`).join("")}
-      </tbody>
-    </table>
-    <script>
-      document.querySelector("table.clients")?.addEventListener("click", async (ev) => {
-        const btn = ev.target instanceof Element ? ev.target.closest("button.session") : null;
-        if (!btn) return;
-        const tr = btn.closest("tr");
-        const table = btn.closest("table");
-        const name = tr?.dataset.name ?? "";
-        const email = tr?.dataset.email ?? "";
-        const country = tr?.dataset.country ?? "";
-        const advisorId = table?.dataset.advisorId ?? "";
-
-        // Open the tab SYNCHRONOUSLY on click so the browser allows it,
-        // then redirect it once the API response arrives.
-        const popup = window.open("about:blank", "_blank");
-        if (!popup) {
-          alert("Popup was blocked. Please allow popups for this page and try again.");
-          return;
-        }
-        popup.document.write("<title>Creating session…</title><p style='font-family:sans-serif;padding:24px'>Creating session for " + name + "…</p>");
-
-        const original = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Working…";
-        try {
-          const res = await fetch("/session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ advisorId, name, email, country }),
-          });
-          const data = await res.json();
-          if (data.status === "ok" && data.sessionUrl) {
-            popup.location.href = data.sessionUrl;
-          } else {
-            popup.close();
-            alert("Error: " + (data.message || JSON.stringify(data)));
-          }
-        } catch (e) {
-          popup.close();
-          alert("Request failed: " + e);
-        } finally {
-          btn.disabled = false;
-          btn.textContent = original;
-        }
-      });
-    </script>` : ""}
-
-  ${r.investorCreated !== undefined ? `
-    <h2>Investor created (POST /v1/investor)</h2>
-    <pre>${escapeHtml(JSON.stringify(r.investorCreated, null, 2))}</pre>` : ""}
-
-  <a class="back" href="/">← back to picker</a>
+  <h1>✅ Authentication successful</h1>
+  <p class="sub">Token exchange completed against the mock OAuth server.</p>
+  <h2>Token response</h2>
+  <pre>${JSON.stringify(tokens, null, 2)}</pre>
+  ${decodedIdToken ? `<h2>Decoded id_token</h2><pre>${JSON.stringify(decodedIdToken, null, 2)}</pre>` : ""}
 </div>
 </body>
 </html>`;
+
+// ── select-and-lookup handlers ───────────────────────────────────────────────
+
+let lastPickedUserIdx: number | undefined;
 
 async function handlePick(idx: number): Promise<Response> {
     const user = USERS[idx];
@@ -247,8 +163,9 @@ async function handlePick(idx: number): Promise<Response> {
         return new Response("Unknown user index", { status: 400 });
     }
 
+    lastPickedUserIdx = idx;
     const saved = { sub: user.sub, email: user.email, name: user.name };
-    console.log("[pick] saved:", saved);
+    console.log(`[pick] saved (lastPickedUserIdx=${idx}):`, saved);
 
     const blocks: ResultBlocks = { user: saved, advisorLookup: null };
 
@@ -388,17 +305,115 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
     }
 }
 
+interface WebhookEvent {
+    type?: string;
+    object_id?: string;
+    object_owner_id?: string;
+}
+
+async function fetchSessionBundle(sessionId: string) {
+    const [session, adviceInformation, goals, transactions] = await Promise.all([
+        client.getAdviceSession(sessionId),
+        client.getAdviceInformation(sessionId),
+        client.listAdviceGoals(sessionId),
+        client.getAdviceTransactions(sessionId),
+    ]);
+
+    // Goals list response shape isn't typed; pull out any id-like field
+    // and fetch per-goal details.
+    const goalItems: unknown[] = Array.isArray(goals)
+        ? goals
+        : (goals as { data?: unknown[]; goals?: unknown[] })?.data
+          ?? (goals as { data?: unknown[]; goals?: unknown[] })?.goals
+          ?? [];
+    const goalIds = goalItems
+        .map((g) => {
+            const obj = g as Record<string, unknown>;
+            return (obj.id ?? obj.goal_id) as string | undefined;
+        })
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+    const goalDetails = await Promise.all(
+        goalIds.map(async (goalId) => ({
+            goal_id: goalId,
+            detail: await client.getAdviceGoal(sessionId, goalId),
+        })),
+    );
+
+    return { session, advice_information: adviceInformation, goals, goal_details: goalDetails, transactions };
+}
+
+async function handleSessionCompleted(sessionId: string, investorId: string) {
+    console.log(`[listener] session.completed session_id=${sessionId} investor_id=${investorId}`);
+
+    const bundle = await fetchSessionBundle(sessionId);
+    const jsonPath = `session_${sessionId}_data.json`;
+    await Bun.write(jsonPath, JSON.stringify(bundle, null, 2));
+    console.log(`[listener] saved ${jsonPath}`);
+
+    const reportMeta = (await client.getReport(investorId, sessionId)) as {
+        data?: Array<{ documentId?: string; documentType?: string }>;
+    };
+    const files = (reportMeta.data ?? [])
+        .filter((f) => typeof f.documentId === "string" && typeof f.documentType === "string")
+        .map((f) => ({ documentId: f.documentId!, documentType: f.documentType! }));
+    if (files.length === 0) {
+        console.warn(`[listener] no report files for session ${sessionId}; skipping PDF`);
+        return;
+    }
+    const pdfRes = await client.downloadReportPdf(investorId, sessionId, { files });
+    const pdfPath = `session_${sessionId}.pdf`;
+    await Bun.write(pdfPath, pdfRes);
+    console.log(`[listener] saved ${pdfPath}`);
+}
+
+async function handleListener(req: Request): Promise<Response> {
+    const contentType = req.headers.get("content-type") ?? "";
+    const body = contentType.includes("application/json")
+        ? await req.json().catch(() => null)
+        : await req.text();
+
+    const echo = {
+        method: req.method,
+        url: req.url,
+        headers: Object.fromEntries(req.headers),
+        body,
+    };
+    console.log("[listener]", JSON.stringify(echo, null, 2));
+
+    const event = body as WebhookEvent | null;
+    if (
+        event?.type === "qap.advice_session.completed" &&
+        typeof event.object_id === "string" &&
+        typeof event.object_owner_id === "string"
+    ) {
+        // Don't make the webhook sender wait — let the download run in the background.
+        handleSessionCompleted(event.object_id, event.object_owner_id).catch((e) => {
+            const detail = e instanceof DeepAlphaApiError
+                ? { status: e.status, message: e.message, body: e.body }
+                : { message: e instanceof Error ? e.message : String(e) };
+            console.error("[listener] session.completed handler failed:", detail);
+        });
+    }
+
+    return Response.json(echo);
+}
+
+// ── Bun server ───────────────────────────────────────────────────────────────
+
 Bun.serve({
     port: PORT,
     async fetch(req: Request) {
         const url = new URL(req.url);
 
-        if (url.pathname === "/" || url.pathname === "/login") {
-            return new Response(pickerPage(), {
+        // Demo home — select-and-lookup picker
+        if (url.pathname === "/") {
+            return new Response(pickerPage(USERS), {
                 headers: { "Content-Type": "text/html; charset=utf-8" },
             });
         }
 
+        // Demo routes
         if (url.pathname === "/pick") {
             const idx = parseInt(url.searchParams.get("user") ?? "", 10);
             if (!Number.isFinite(idx)) {
@@ -412,13 +427,105 @@ Bun.serve({
             return handleCreateSession(body);
         }
 
-        return new Response("Not found", { status: 404 });
+        if (url.pathname === "/listener" && req.method === "POST") {
+            return handleListener(req);
+        }
+
+        // Mock SSO debug callback
+        if (url.pathname === "/debug") {
+            const code = url.searchParams.get("code");
+            if (!code) {
+                return new Response("Debug callback hit without ?code", {
+                    status: 400,
+                    headers: { "Content-Type": "text/plain; charset=utf-8" },
+                });
+            }
+            const tokenRes = await fetch(`http://localhost:${OAUTH_PORT}/token`, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                    grant_type: "authorization_code",
+                    code,
+                    redirect_uri: `${url.origin}/debug`,
+                    client_id: "mock-debug",
+                }).toString(),
+            });
+            const tokens: any = await tokenRes.json();
+            let decoded: any = null;
+            try {
+                if (tokens.id_token) {
+                    decoded = JSON.parse(Buffer.from(tokens.id_token.split(".")[1], "base64url").toString());
+                }
+            } catch { /* leave decoded null */ }
+            return new Response(debugPage(tokens, decoded), {
+                headers: { "Content-Type": "text/html; charset=utf-8" },
+            });
+        }
+
+        // Mock SSO login
+        if (url.pathname === "/login") {
+            const params = new URLSearchParams(url.search);
+            if (!params.has("redirect_uri")) {
+                params.set("redirect_uri", `${url.origin}/debug`);
+                if (!params.has("response_type")) params.set("response_type", "code");
+                if (!params.has("client_id")) params.set("client_id", "mock-debug");
+            }
+            const qs = params.toString();
+            return new Response(
+                pickerPage(USERS, {
+                    pageTitle: "Mock SSO Login",
+                    emoji: "🔐",
+                    title: "Sign in",
+                    subtitle: "Mock SSO — choose an account",
+                    note: "🛠 Development only — not a real identity provider",
+                    hrefForUser: (i) => `/authorize?${qs}&user=${i}`,
+                }),
+                { headers: { "Content-Type": "text/html; charset=utf-8" } },
+            );
+        }
+
+        if (url.pathname === "/authorize" && !url.searchParams.has("user")) {
+            if (lastPickedUserIdx !== undefined && USERS[lastPickedUserIdx]) {
+                console.log(`[authorize] auto-completing as user[${lastPickedUserIdx}] ${USERS[lastPickedUserIdx]!.name}`);
+                const params = new URLSearchParams(url.search);
+                params.set("user", String(lastPickedUserIdx));
+                return Response.redirect(`${url.origin}/authorize?${params.toString()}`, 302);
+            }
+            return Response.redirect(`${url.origin}/login${url.search}`, 302);
+        }
+
+        if (url.pathname === "/authorize" && !url.searchParams.has("redirect_uri")) {
+            return new Response(
+                "Missing required OAuth parameter: redirect_uri after user selection.",
+                { status: 400, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+            );
+        }
+
+        // Proxy everything else to oauth2-mock-server
+        const target = new URL(req.url);
+        target.hostname = "localhost";
+        target.port = String(OAUTH_PORT);
+
+        return fetch(target.toString(), {
+            method: req.method,
+            headers: req.headers,
+            body: req.body,
+            redirect: "manual",
+        });
     },
 });
 
-console.log(`\nSelect-and-lookup demo on http://localhost:${PORT}`);
-console.log("Tenant:    https://api.test.deepalpha.dev");
-console.log(`Client ID: ${CLIENT_ID}`);
+// ── Ready ─────────────────────────────────────────────────────────────────────
+
+console.log(`\nMerged server listening on http://localhost:${PORT}`);
+console.log(`Issuer URL:  ${PUBLIC_ISSUER_URL}`);
+console.log(`Discovery:   ${PUBLIC_ISSUER_URL}/.well-known/openid-configuration`);
+console.log(`Tenant:      https://api.test.deepalpha.dev`);
+console.log(`Client ID:   ${CLIENT_ID}`);
+console.log("Routes:      GET / | GET /pick?user=N | POST /session | POST /listener");
+console.log("             GET /login | GET /authorize | GET /debug | * → mock OAuth");
 console.log("\nUsers:");
-USERS.forEach((u, i) => console.log(`  [${i}] ${u.name} <${u.email}>`));
+USERS.forEach((u, i) => console.log(`  [${i}] ${u.name} <${u.email}> roles=${u.roles.join(",")}`));
 console.log("\nPress Ctrl+C to stop\n");
+
+process.on("SIGINT", async () => { await server.stop(); process.exit(0); });

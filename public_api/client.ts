@@ -699,6 +699,47 @@ export class DeepAlphaClient {
     return this.request("POST", path, { body, reqOpts });
   }
 
+  /**
+   * POST /v1/report/{investor_id}/{session_id}/download — returns the raw
+   * Response so the caller can stream binary (PDF) bytes to disk.
+   * `request()` decodes non-JSON bodies as text, which corrupts binary.
+   */
+  async downloadReportPdf(
+    investorId: string,
+    sessionId: string,
+    body: DownloadReportInputSchema,
+    reqOpts?: RequestOptions,
+  ): Promise<Response> {
+    const path = fillPath("/v1/report/{investor_id}/{session_id}/download", {
+      investor_id: investorId,
+      session_id: sessionId,
+    });
+    const token = await this.ensureAccessToken();
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/pdf",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(reqOpts?.headers ?? {}),
+      },
+      body: JSON.stringify(body),
+      signal: reqOpts?.signal,
+    });
+    if (!res.ok) {
+      const ct = res.headers.get("content-type") ?? "";
+      const errBody = ct.includes("application/json")
+        ? await res.json().catch(() => undefined)
+        : await res.text().catch(() => undefined);
+      throw new DeepAlphaApiError(
+        res.status,
+        `POST ${path} failed: ${res.status} ${res.statusText}`,
+        errBody,
+      );
+    }
+    return res;
+  }
+
   // ===========================================================================
   // Advisors
   // ===========================================================================

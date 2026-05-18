@@ -6,3 +6,5 @@ bun.lockb
 .env
 .env.local
 .env.*.local
+*.pdf
+*.json
