@@ -11,11 +11,18 @@ export interface ImaginaryClient {
     country: string;
 }
 
+export interface InvestorSessionRow {
+    session_id: string;
+    completed: boolean;
+}
+
+export type ClientWithSessions = ImaginaryClient & { sessions: InvestorSessionRow[] };
+
 export interface ResultBlocks {
     user: { sub: string; email: string; name: string };
     advisorLookup: unknown;
     advisorId?: string;
-    clients?: ImaginaryClient[];
+    clients?: ClientWithSessions[];
     investorCreated?: unknown;
     error?: { status?: number; message: string; body?: unknown };
 }
@@ -131,6 +138,13 @@ export const resultPage = (r: ResultBlocks): string => /* html */ `<!DOCTYPE htm
   button.session{background:#6366f1;color:#fff;border:none;border-radius:6px;
         padding:7px 12px;font-size:13px;font-weight:500;cursor:pointer}
   button.session:hover{background:#4f46e5}
+  tr.sessions-row > td{background:#f9fafb;padding:6px 12px 12px 36px;border-bottom:1px solid #e5e7eb}
+  table.sessions{width:100%;border-collapse:collapse}
+  table.sessions td{padding:4px 8px;font-size:13px;border:none}
+  table.sessions tr.empty td{color:#9ca3af;font-style:italic}
+  .pill.done{background:#d1fae5;color:#065f46}
+  .pill.wip{background:#fef3c7;color:#92400e}
+  .sid{margin-left:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#9ca3af}
 </style>
 </head>
 <body>
@@ -165,6 +179,23 @@ export const resultPage = (r: ResultBlocks): string => /* html */ `<!DOCTYPE htm
             <td>${escapeHtml(c.email)}</td>
             <td>${escapeHtml(c.country)}</td>
             <td><button class="session" type="button">Create session</button></td>
+          </tr>
+          <tr class="sessions-row">
+            <td colspan="4">
+              <table class="sessions">
+                <tbody>
+                  ${c.sessions.length === 0
+                    ? `<tr class="empty"><td>No sessions yet</td></tr>`
+                    : c.sessions.map((s) => `
+                        <tr title="${escapeHtml(s.session_id)}">
+                          <td>
+                            <span class="pill ${s.completed ? "done" : "wip"}">${s.completed ? "completed" : "in progress"}</span>
+                            <span class="sid">${escapeHtml(s.session_id.slice(0, 8))}…</span>
+                          </td>
+                        </tr>`).join("")}
+                </tbody>
+              </table>
+            </td>
           </tr>`).join("")}
       </tbody>
     </table>

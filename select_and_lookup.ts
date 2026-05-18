@@ -6,7 +6,7 @@ import {
     type ImaginaryClient,
     type ResultBlocks,
 } from "./templates.ts";
-import { recordOtherCall, recordSessionCall } from "./db.ts";
+import { listSessionsForInvestorEmail, recordOtherCall, recordSessionCall } from "./db.ts";
 
 const PORT = 9090;
 const OAUTH_PORT = 9091;
@@ -182,7 +182,11 @@ async function handlePick(idx: number): Promise<Response> {
 
         if (matched?.advisor_id) {
             blocks.advisorId = matched.advisor_id;
-            blocks.clients = IMAGINARY_CLIENTS;
+            const advisorId = matched.advisor_id;
+            blocks.clients = IMAGINARY_CLIENTS.map((c) => ({
+                ...c,
+                sessions: listSessionsForInvestorEmail(advisorId, c.email),
+            }));
             console.log(`[pick] saved advisor_id=${matched.advisor_id}`);
         } else {
             console.log("[pick] no advisor → creating investor");
