@@ -63,7 +63,15 @@ const selectSessionsForInvestorEmail = db.prepare(`
       FROM other_api_calls
       WHERE api_endpoint = 'POST /v1/investor'
         AND advisor_id = ?
-        AND json_extract(request_body, '$.email') = ?
+        AND LOWER(json_extract(request_body, '$.email')) = LOWER(?)
+      UNION
+      SELECT json_extract(inv.value, '$.id')
+      FROM other_api_calls li,
+           json_each(json_extract(li.response_body, '$.investors')) inv
+      WHERE li.api_endpoint = 'GET /v1/investor'
+        AND li.advisor_id = ?
+        AND json_extract(li.response_body, '$.investors') IS NOT NULL
+        AND LOWER(json_extract(inv.value, '$.email')) = LOWER(?)
     )
   ORDER BY s.id DESC
 `);
@@ -78,7 +86,13 @@ export function listSessionsForInvestorEmail(
   email: string,
 ): InvestorSessionRow[] {
   try {
-    const rows = selectSessionsForInvestorEmail.all(advisorId, advisorId, email) as Array<{
+    const rows = selectSessionsForInvestorEmail.all(
+      advisorId,
+      advisorId,
+      email,
+      advisorId,
+      email,
+    ) as Array<{
       session_id: string;
       completed: number;
     }>;
