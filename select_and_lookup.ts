@@ -6,6 +6,7 @@ import {
     type ImaginaryClient,
     type ResultBlocks,
 } from "./templates.ts";
+import { recordOtherCall, recordSessionCall } from "./db.ts";
 
 const PORT = 9090;
 const OAUTH_PORT = 9091;
@@ -23,14 +24,6 @@ const client = new DeepAlphaClient({ clientId: CLIENT_ID, clientSecret: CLIENT_S
 
 const USERS = [
     {
-        sub: "quantfolio.fbae4e5d-9606-438a-814d-c49ecf0fd4b0",
-        email: "bjornar@quantfol.io",
-        email_verified: true,
-        name: "Bjørnar Mundal",
-        preferred_username: "Bjornar",
-        roles: ["admin"],
-    },
-    {
         sub: "quantfolio.a1b2c3d4-1234-5678-abcd-ef0123456789",
         email: "alice@quantfol.io",
         email_verified: true,
@@ -44,6 +37,14 @@ const USERS = [
         email_verified: true,
         name: "Bob Bergström",
         preferred_username: "Bob",
+        roles: ["advisor"],
+    },
+    {
+        sub: "quantfolio.deadbeef-cafe-babe-feed-tea123456",
+        email: "claire@quantfol.io",
+        email_verified: true,
+        name: "Claire Bertlelsen",
+        preferred_username: "Claire",
         roles: ["advisor"],
     },
 ];
@@ -170,9 +171,11 @@ async function handlePick(idx: number): Promise<Response> {
     const blocks: ResultBlocks = { user: saved, advisorLookup: null };
 
     try {
-        const advisorRes = (await client.listAdvisors({ email: user.email })) as {
+        const listAdvisorsReq = { email: user.email };
+        const advisorRes = (await client.listAdvisors(listAdvisorsReq)) as {
             advisors?: Array<{ advisor_id?: string }>;
         };
+        recordOtherCall({}, "GET /v1/advisor", listAdvisorsReq, advisorRes);
         blocks.advisorLookup = advisorRes;
         const matched = advisorRes?.advisors?.[0];
         console.log(`[pick] /v1/advisor returned ${advisorRes?.advisors?.length ?? 0} match(es)`);
@@ -183,12 +186,19 @@ async function handlePick(idx: number): Promise<Response> {
             console.log(`[pick] saved advisor_id=${matched.advisor_id}`);
         } else {
             console.log("[pick] no advisor → creating investor");
-            const created = await client.createInvestor({
+            const createInvestorReq = {
                 name: user.name,
                 email: user.email,
                 country: "NO",
                 investorType: "person",
-            });
+            };
+            const created = (await client.createInvestor(createInvestorReq)) as { id?: string };
+            recordOtherCall(
+                { investorId: created.id },
+                "POST /v1/investor",
+                createInvestorReq,
+                created,
+            );
             blocks.investorCreated = created;
             console.log("[pick] /v1/investor response:", created);
         }
@@ -243,9 +253,16 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
 
     try {
         console.log(`[session] checking investors for advisor ${advisorId} with email ${email}`);
-        const investorsRes = (await client.listInvestors({ advisorId, pageSize: 100 })) as {
+        const listInvestorsReq = { advisorId, pageSize: 100 };
+        const investorsRes = (await client.listInvestors(listInvestorsReq)) as {
             investors?: Array<{ id?: string; email?: string; name?: string }>;
         };
+        recordOtherCall(
+            { advisorId },
+            "GET /v1/investor",
+            listInvestorsReq,
+            investorsRes,
+        );
         const targetEmail = email.toLowerCase();
         let investorId = investorsRes?.investors?.find(
             (i) => (i.email ?? "").toLowerCase() === targetEmail,
@@ -254,13 +271,20 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
 
         if (!investorId) {
             console.log(`[session] no investor with email=${email} under this advisor → creating`);
-            const newInvestor = (await client.createInvestor({
+            const createInvestorReq = {
                 name,
                 email,
                 country: country || "NO",
                 investorType: "person",
                 advisorId,
-            })) as { id?: string };
+            };
+            const newInvestor = (await client.createInvestor(createInvestorReq)) as { id?: string };
+            recordOtherCall(
+                { advisorId, investorId: newInvestor.id },
+                "POST /v1/investor",
+                createInvestorReq,
+                newInvestor,
+            );
             createdInvestor = newInvestor;
             investorId = newInvestor.id;
             if (!investorId) {
@@ -275,12 +299,22 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
         }
 
         console.log(`[session] POST /v1/state_session for investor ${investorId}`);
-        const created = (await client.createStateSession({
+        const createSessionReq = {
             advisor_id: advisorId,
             investor_id: investorId,
             name: `Session for ${name} @ ${new Date().toISOString()}`,
             advice_type: "MiFIID II investment Advice",
-        } as never)) as { session_id?: string; links?: unknown };
+        };
+        const created = (await client.createStateSession(createSessionReq as never)) as {
+            session_id?: string;
+            links?: unknown;
+        };
+        recordOtherCall(
+            { advisorId, investorId },
+            "POST /v1/state_session",
+            createSessionReq,
+            created,
+        );
 
         const rawLink = pickFirstUrl(created.links);
         const sessionUrl = rawLink
