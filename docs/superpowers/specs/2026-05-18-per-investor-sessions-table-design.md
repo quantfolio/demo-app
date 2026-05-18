@@ -43,6 +43,15 @@ GET /pick?user=N
 
 `listSessionsForInvestorEmail` is a new synchronous function exported from `db.ts`. `handlePick` calls it once per imaginary client (so 5 lookups per page load, all sub-millisecond against SQLite). The result is attached to each client object before it is handed to the template.
 
+### Matching path: email → investor_id
+
+The goal is to go from `(advisorId, email)` to a set of `investor_id`s in our SQLite log, then to the `POST /v1/state_session` rows that reference those investor_ids. An investor_id shows up in `other_api_calls` via **two paths**, and both must be searched:
+
+- **Path A — `POST /v1/investor` we made.** `handleCreateSession` calls `createInvestor` only when `listInvestors` did not already find an investor matching the email. When this branch fires, a `POST /v1/investor` row is written whose `request_body.email` equals the imaginary client's email and whose `response_body.id` is the new investor_id.
+- **Path B — `GET /v1/investor` (listInvestors) returned the investor.** When the investor pre-exists in QAP — the common case for any tenant that has been used before — `handleCreateSession` finds it inside the `listInvestors` response and skips `createInvestor`. The investor_id is buried inside `response_body.investors[]` of the `GET /v1/investor` row, identified by its `email` field.
+
+Searching only Path A misses every session whose investor pre-existed in QAP. The query must `UNION` both paths.
+
 ### SQL
 
 A single prepared statement in `db.ts`:
@@ -57,47 +66,37 @@ SELECT
 FROM other_api_calls s
 WHERE s.api_endpoint = 'POST /v1/state_session'
   AND s.advisor_id = ?
-  AND s.investor_id IN (
-    SELECT json_extract(response_body, '$.id')
-    FROM other_api_calls
-    WHERE api_endpoint = 'POST /v1/investor'
-      AND advisor_id = ?
-      AND json_extract(request_body, '$.email') = ?
-  )
-ORDER BY s.id DESC;
-```
-
-Parameters: `(advisorId, advisorId, email)`.
-
-Notes:
-- `json_extract` is built in to SQLite (no extension required).
-- `EXISTS` returns `0` / `1`; the helper maps it to `boolean` in TypeScript.
-- Rows are ordered newest first (largest `id` first) so the most recent session appears at the top of the sub-table.
-- The outer query filters by `advisor_id` so a session created by a different advisor for the same email is not shown — sessions are scoped to the picked advisor.
-- Rows whose `response_body` did not include a `session_id` (e.g., a `POST /v1/state_session` that returned an error shape) drop out naturally because `json_extract` returns `NULL` and the row would still appear with `session_id = NULL`. The result type permits this — the renderer must handle a `null` id by treating it as "unknown session" or skipping. **Decision:** the helper filters them out by adding `AND json_extract(s.response_body, '$.session_id') IS NOT NULL` so the renderer always sees a real id.
-
-Final SQL:
-
-```sql
-SELECT
-  json_extract(s.response_body, '$.session_id') AS session_id,
-  EXISTS (
-    SELECT 1 FROM session_api_calls c
-    WHERE c.session_id = json_extract(s.response_body, '$.session_id')
-  ) AS completed
-FROM other_api_calls s
-WHERE s.api_endpoint = 'POST /v1/state_session'
-  AND s.advisor_id = ?
   AND json_extract(s.response_body, '$.session_id') IS NOT NULL
   AND s.investor_id IN (
+    -- Path A: investor created by this app
     SELECT json_extract(response_body, '$.id')
     FROM other_api_calls
     WHERE api_endpoint = 'POST /v1/investor'
       AND advisor_id = ?
-      AND json_extract(request_body, '$.email') = ?
+      AND LOWER(json_extract(request_body, '$.email')) = LOWER(?)
+    UNION
+    -- Path B: investor pre-existed in QAP, surfaced via listInvestors
+    SELECT json_extract(inv.value, '$.id')
+    FROM other_api_calls li,
+         json_each(json_extract(li.response_body, '$.investors')) inv
+    WHERE li.api_endpoint = 'GET /v1/investor'
+      AND li.advisor_id = ?
+      AND json_extract(li.response_body, '$.investors') IS NOT NULL
+      AND LOWER(json_extract(inv.value, '$.email')) = LOWER(?)
   )
 ORDER BY s.id DESC;
 ```
+
+Parameters: `(advisorId, advisorId, email, advisorId, email)`.
+
+Notes:
+- `json_extract` and `json_each` are built in to SQLite (no extension required). `json_each(json_extract(..., '$.investors'))` walks the `investors[]` array inside a `listInvestors` response so we can read each investor's `id` and `email` as individual rows.
+- Both paths use `LOWER(...) = LOWER(?)` to mirror the case-insensitive comparison `handleCreateSession` already does on email (it compares `i.email.toLowerCase() === targetEmail`).
+- The `IS NOT NULL` guard on `$.investors` keeps `json_each` from being called on a row whose `listInvestors` response lacked an `investors` array (`json_each(NULL)` is implementation-defined).
+- `EXISTS` returns `0` / `1`; the helper maps it to `boolean` in TypeScript.
+- Rows are ordered newest first (largest `id` first) so the most recent session appears at the top of the sub-table.
+- The outer query filters `s.advisor_id` so a session created under a different advisor for the same email is not shown — sessions are scoped to the picked advisor.
+- The `AND json_extract(s.response_body, '$.session_id') IS NOT NULL` guard drops `POST /v1/state_session` rows whose response lacked a `session_id` (e.g., an unusual error shape returned as 2xx), so the renderer always sees a real id.
 
 ### `db.ts` additions
 
@@ -220,7 +219,8 @@ Nothing else in `handlePick`, `handleCreateSession`, `fetchSessionBundle`, or `h
 ## Edge cases
 
 - **No advisor for picked user.** `blocks.clients` is not set, the existing code already skips the Clients table block. No change.
-- **An imaginary client has no `POST /v1/investor` row yet.** The inner subquery returns an empty set, the outer query returns no rows, the helper returns `[]`, and the sub-table renders "No sessions yet".
+- **An imaginary client has never had a session created.** Neither Path A nor Path B finds an investor_id; the inner subquery is empty, the helper returns `[]`, and the sub-table renders "No sessions yet".
+- **Investor pre-exists in QAP (Path B only).** `handleCreateSession` skips `createInvestor`, so no `POST /v1/investor` row is recorded — but the matching investor_id is reachable through `listInvestors` rows. The `UNION` covers this.
 - **`POST /v1/state_session` row exists but its `response_body` has no `session_id`** (e.g., an unusual QAP error returned as 2xx). Filtered out by the `IS NOT NULL` clause.
 - **Same email used by multiple investors under the same advisor.** All matching investor_ids feed into the outer `IN` clause, and every session for any of them is listed. Acceptable — the UI groups by client email, which is the user-facing identity in the imaginary-clients list.
 - **SQLite read failure.** The helper logs and returns `[]`, so the page still renders with empty sub-tables.
