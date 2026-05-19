@@ -11,9 +11,18 @@ export interface ImaginaryClient {
     country: string;
 }
 
+export interface ApiCallRow {
+    id: number;
+    api_endpoint: string;
+    request_body: string | null;
+    response_body: string;
+    timestamp: string;
+}
+
 export interface InvestorSessionRow {
     session_id: string;
     completed: boolean;
+    calls: ApiCallRow[];
 }
 
 export type ClientWithSessions = ImaginaryClient & { sessions: InvestorSessionRow[] };
@@ -32,6 +41,15 @@ export const escapeHtml = (s: string): string =>
         /[&<>"']/g,
         (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
     );
+
+const prettyJson = (raw: string | null): string => {
+    if (raw === null) return "—";
+    try {
+        return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+        return raw;
+    }
+};
 
 const AVATAR_COLORS = ["#6366f1", "#10b981", "#f59e0b"];
 const BADGE_STYLES: Record<string, string> = {
@@ -145,6 +163,23 @@ export const resultPage = (r: ResultBlocks): string => /* html */ `<!DOCTYPE htm
   .pill.done{background:#d1fae5;color:#065f46}
   .pill.wip{background:#fef3c7;color:#92400e}
   .sid{margin-left:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#9ca3af}
+  details.session-acc{margin:2px 0}
+  details.session-acc > summary{cursor:pointer;list-style:none;padding:2px 0;outline:none}
+  details.session-acc > summary::-webkit-details-marker{display:none}
+  details.session-acc[open] > summary{margin-bottom:6px}
+  .calls{margin-left:18px;padding-left:8px;border-left:2px solid #e5e7eb}
+  .calls .empty{color:#9ca3af;font-style:italic;font-size:12px;padding:4px 0}
+  details.call-acc{margin:4px 0;padding:4px 0;border-top:1px solid #f3f4f6}
+  details.call-acc:first-child{border-top:none}
+  details.call-acc > summary{cursor:pointer;list-style:none;display:flex;gap:10px;align-items:baseline;outline:none}
+  details.call-acc > summary::-webkit-details-marker{display:none}
+  details.call-acc > summary::before{content:"▸";color:#9ca3af;font-size:10px;display:inline-block;width:10px;transition:transform .12s}
+  details.call-acc[open] > summary::before{transform:rotate(90deg)}
+  code.endpoint{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#374151}
+  .ts{font-size:11px;color:#9ca3af;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .bodies{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0 4px 16px}
+  .bodies .label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;margin-bottom:4px}
+  .bodies pre{margin:0;font-size:11px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -189,8 +224,33 @@ export const resultPage = (r: ResultBlocks): string => /* html */ `<!DOCTYPE htm
                     : c.sessions.map((s) => `
                         <tr title="${escapeHtml(s.session_id)}">
                           <td>
-                            <span class="pill ${s.completed ? "done" : "wip"}">${s.completed ? "completed" : "in progress"}</span>
-                            <span class="sid">${escapeHtml(s.session_id.slice(0, 8))}…</span>
+                            <details class="session-acc">
+                              <summary>
+                                <span class="pill ${s.completed ? "done" : "wip"}">${s.completed ? "completed" : "in progress"}</span>
+                                <span class="sid">${escapeHtml(s.session_id.slice(0, 8))}…</span>
+                              </summary>
+                              <div class="calls">
+                                ${s.calls.length === 0
+                                  ? `<div class="empty">No API calls captured yet</div>`
+                                  : s.calls.map((call) => `
+                                      <details class="call-acc">
+                                        <summary>
+                                          <code class="endpoint">${escapeHtml(call.api_endpoint)}</code>
+                                          <span class="ts">${escapeHtml(call.timestamp)}</span>
+                                        </summary>
+                                        <div class="bodies">
+                                          <div class="body">
+                                            <div class="label">Request</div>
+                                            <pre>${escapeHtml(prettyJson(call.request_body))}</pre>
+                                          </div>
+                                          <div class="body">
+                                            <div class="label">Response</div>
+                                            <pre>${escapeHtml(prettyJson(call.response_body))}</pre>
+                                          </div>
+                                        </div>
+                                      </details>`).join("")}
+                              </div>
+                            </details>
                           </td>
                         </tr>`).join("")}
                 </tbody>

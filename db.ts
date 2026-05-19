@@ -76,9 +76,25 @@ const selectSessionsForInvestorEmail = db.prepare(`
   ORDER BY s.id DESC
 `);
 
+const selectApiCallsForSession = db.prepare(`
+  SELECT id, api_endpoint, request_body, response_body, timestamp
+  FROM session_api_calls
+  WHERE session_id = ?
+  ORDER BY id ASC
+`);
+
+export interface ApiCallRow {
+  id: number;
+  api_endpoint: string;
+  request_body: string | null;
+  response_body: string;
+  timestamp: string;
+}
+
 export interface InvestorSessionRow {
   session_id: string;
   completed: boolean;
+  calls: ApiCallRow[];
 }
 
 export function listSessionsForInvestorEmail(
@@ -86,7 +102,7 @@ export function listSessionsForInvestorEmail(
   email: string,
 ): InvestorSessionRow[] {
   try {
-    const rows = selectSessionsForInvestorEmail.all(
+    const sessions = selectSessionsForInvestorEmail.all(
       advisorId,
       advisorId,
       email,
@@ -96,9 +112,10 @@ export function listSessionsForInvestorEmail(
       session_id: string;
       completed: number;
     }>;
-    return rows.map((r) => ({
-      session_id: r.session_id,
-      completed: r.completed === 1,
+    return sessions.map((s) => ({
+      session_id: s.session_id,
+      completed: s.completed === 1,
+      calls: selectApiCallsForSession.all(s.session_id) as ApiCallRow[],
     }));
   } catch (e) {
     console.error("[db] listSessionsForInvestorEmail failed:", e);
