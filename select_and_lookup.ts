@@ -4,6 +4,7 @@ import {
     pickerPage,
     resultPage,
     logPage,
+    dashboardPage,
     commRowHtml,
     type ImaginaryClient,
     type ResultBlocks,
@@ -507,8 +508,15 @@ Bun.serve({
     async fetch(req: Request) {
         const url = new URL(req.url);
 
-        // Demo home — select-and-lookup picker
+        // Demo home — two-pane dashboard (picker left, comm log right)
         if (url.pathname === "/") {
+            return new Response(dashboardPage(), {
+                headers: { "Content-Type": "text/html; charset=utf-8" },
+            });
+        }
+
+        // Standalone picker — hosted in the dashboard's left pane
+        if (url.pathname === "/picker") {
             return new Response(pickerPage(USERS), {
                 headers: { "Content-Type": "text/html; charset=utf-8" },
             });

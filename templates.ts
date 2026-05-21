@@ -311,7 +311,7 @@ export const resultPage = (r: ResultBlocks): string => /* html */ `<!DOCTYPE htm
     <h2>Investor created (POST /v1/investor)</h2>
     <pre>${escapeHtml(JSON.stringify(r.investorCreated, null, 2))}</pre>` : ""}
 
-  <a class="back" href="/">← back to picker</a>
+  <a class="back" href="/picker">← back to picker</a>
 </div>
 </body>
 </html>`;
@@ -410,7 +410,7 @@ export const logPage = (rows: CommLogRow[], completed: Set<string>): string => /
   <div style="max-width:960px;margin:0 auto">
     <h1>\u{1F4E1} Communication Log</h1>
     <p class="sub">Live feed of webhooks, API calls and OAuth traffic · <span id="status">connecting…</span></p>
-    <a class="back" href="/">← back to picker</a>
+    <a class="back" href="/picker">← back to picker</a>
   </div>
   <div id="feed">
     ${rows.map((r) => commRowHtml(r, completed)).join("")}
@@ -429,6 +429,55 @@ export const logPage = (rows: CommLogRow[], completed: Set<string>): string => /
       console.error("bad event", err);
     }
   };
+</script>
+</body>
+</html>`;
+
+// Two-pane dashboard: the picker/lookup flow on the left, the live
+// communication log on the right, separated by a draggable divider.
+// Each pane is an iframe hosting an existing standalone page unchanged.
+export const dashboardPage = (): string => /* html */ `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DeepAlpha — Dashboard</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{display:flex;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden}
+  iframe{height:100%;border:none;display:block}
+  #left{width:50%}
+  #right{flex:1}
+  #divider{width:6px;flex-shrink:0;cursor:col-resize;background:#cbd5e1}
+  #divider:hover{background:#6366f1}
+  /* While dragging, suppress iframe pointer events so mousemove keeps
+     reaching this document instead of being swallowed by the iframe. */
+  body.dragging{user-select:none;cursor:col-resize}
+  body.dragging iframe{pointer-events:none}
+</style>
+</head>
+<body>
+  <iframe id="left" src="/picker" title="Pick & lookup"></iframe>
+  <div id="divider" title="Drag to resize"></div>
+  <iframe id="right" src="/log" title="Communication log"></iframe>
+<script>
+  const left = document.getElementById("left");
+  const divider = document.getElementById("divider");
+  divider.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    document.body.classList.add("dragging");
+    const onMove = (ev) => {
+      const w = Math.min(Math.max(ev.clientX, 200), window.innerWidth - 200);
+      left.style.width = w + "px";
+    };
+    const onUp = () => {
+      document.body.classList.remove("dragging");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
 </script>
 </body>
 </html>`;
