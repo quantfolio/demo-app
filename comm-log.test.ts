@@ -25,3 +25,22 @@ test("completedSessionIds reflects completion webhooks only", () => {
   expect(completedSessionIds().has("s1")).toBe(true);
   expect(completedSessionIds().has("s2")).toBe(false);
 });
+
+test("recordSessionCall also writes an api_out comm_log row", async () => {
+  const { recordSessionCall } = await import("./db.ts");
+  recordSessionCall("sess-rec", "GET /v2/advice_session/{session_id}", { a: 1 }, { b: 2 });
+  const row = listComm(1)[0]!;
+  expect(row.kind).toBe("api_out");
+  expect(row.label).toBe("GET /v2/advice_session/{session_id}");
+  expect(row.session_id).toBe("sess-rec");
+});
+
+test("recordOtherCall also writes an api_out comm_log row with meta", async () => {
+  const { recordOtherCall } = await import("./db.ts");
+  recordOtherCall({ advisorId: "adv1" }, "POST /v1/state_session",
+    { req: 1 }, { session_id: "s3" }, { sessionUrl: "https://example.test/s3" });
+  const row = listComm(1)[0]!;
+  expect(row.kind).toBe("api_out");
+  expect(row.session_id).toBe("s3");
+  expect(JSON.parse(row.meta!).sessionUrl).toBe("https://example.test/s3");
+});

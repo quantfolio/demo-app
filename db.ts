@@ -192,6 +192,7 @@ export function recordSessionCall(
   apiEndpoint: string,
   requestBody: unknown,
   responseBody: unknown,
+  meta?: Record<string, unknown>,
 ): void {
   try {
     insertSession.run(
@@ -204,6 +205,14 @@ export function recordSessionCall(
   } catch (e) {
     console.error("[db] recordSessionCall failed:", e);
   }
+  logComm({
+    kind: "api_out",
+    label: apiEndpoint,
+    sessionId,
+    requestBody,
+    responseBody,
+    meta,
+  });
 }
 
 export function recordOtherCall(
@@ -211,6 +220,7 @@ export function recordOtherCall(
   apiEndpoint: string,
   requestBody: unknown,
   responseBody: unknown,
+  meta?: Record<string, unknown>,
 ): void {
   try {
     insertOther.run(
@@ -224,6 +234,13 @@ export function recordOtherCall(
   } catch (e) {
     console.error("[db] recordOtherCall failed:", e);
   }
+  logComm({
+    kind: "api_out",
+    label: apiEndpoint,
+    requestBody,
+    responseBody,
+    meta,
+  });
 }
 
 export function logComm(entry: CommEntry): void {
