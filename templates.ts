@@ -1,3 +1,5 @@
+import type { CommLogRow } from "./db.ts";
+
 export interface PickerUser {
     name: string;
     email: string;
@@ -311,5 +313,122 @@ export const resultPage = (r: ResultBlocks): string => /* html */ `<!DOCTYPE htm
 
   <a class="back" href="/">← back to picker</a>
 </div>
+</body>
+</html>`;
+
+const KIND_BADGE: Record<string, { label: string; bg: string; fg: string }> = {
+  webhook_in: { label: "WEBHOOK IN", bg: "#22dd66", fg: "#062b13" },
+  api_out: { label: "API OUT", bg: "#4488ff", fg: "#ffffff" },
+  oauth: { label: "OAUTH", bg: "#aa66ff", fg: "#ffffff" },
+};
+
+const metaValue = (meta: string | null, key: string): string | undefined => {
+  if (!meta) return undefined;
+  try {
+    const v = (JSON.parse(meta) as Record<string, unknown>)[key];
+    return typeof v === "string" ? v : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// The label cell — a plain span, or a link for incomplete sessions / downloads.
+const labelCell = (row: CommLogRow, completed: Set<string>): string => {
+  const text = escapeHtml(row.label);
+  if (
+    row.label === "POST /v1/state_session" &&
+    row.session_id &&
+    !completed.has(row.session_id)
+  ) {
+    const url = metaValue(row.meta, "sessionUrl");
+    if (url) {
+      return `<a class="evt-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">${text} ↗</a>`;
+    }
+  }
+  if (row.label.includes("/download") && row.session_id) {
+    return `<a class="evt-link" href="/report?session=${encodeURIComponent(row.session_id)}" target="_blank" rel="noopener">${text} ↗ PDF</a>`;
+  }
+  return `<span class="evt-label">${text}</span>`;
+};
+
+export const commRowHtml = (row: CommLogRow, completed: Set<string>): string => {
+  const badge = KIND_BADGE[row.kind] ?? { label: row.kind, bg: "#999", fg: "#fff" };
+  const sid = row.session_id ? `<span class="sid">${escapeHtml(row.session_id.slice(0, 8))}…</span>` : "";
+  const status = row.status ? `<span class="evt-status">${escapeHtml(row.status)}</span>` : "";
+  return /* html */ `
+  <details class="evt evt-${escapeHtml(row.kind)}" data-id="${row.id}">
+    <summary>
+      <span class="ts">${escapeHtml(row.timestamp)}</span>
+      <span class="badge" style="background:${badge.bg};color:${badge.fg}">${escapeHtml(badge.label)}</span>
+      ${labelCell(row, completed)}
+      ${sid}
+      ${status}
+    </summary>
+    <div class="bodies">
+      <div class="body"><div class="label">Request</div><pre>${escapeHtml(prettyJson(row.request_body))}</pre></div>
+      <div class="body"><div class="label">Response</div><pre>${escapeHtml(prettyJson(row.response_body))}</pre></div>
+    </div>
+  </details>`;
+};
+
+export const logPage = (rows: CommLogRow[], completed: Set<string>): string => /* html */ `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Communication Log</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       background:#0f172a;min-height:100vh;padding:24px;color:#e2e8f0}
+  h1{font-size:20px;margin-bottom:4px}
+  .sub{font-size:12px;color:#94a3b8;margin-bottom:18px}
+  a.back{font-size:12px;color:#818cf8;text-decoration:none}
+  a.back:hover{text-decoration:underline}
+  #feed{max-width:960px;margin:14px auto 0}
+  details.evt{background:#1e293b;border-radius:8px;margin:6px 0;border-left:4px solid #475569}
+  details.evt-webhook_in{border-left-color:#22dd66}
+  details.evt-api_out{border-left-color:#4488ff}
+  details.evt-oauth{border-left-color:#aa66ff}
+  details.evt > summary{cursor:pointer;list-style:none;display:flex;gap:10px;align-items:baseline;
+       padding:9px 12px;outline:none;flex-wrap:wrap}
+  details.evt > summary::-webkit-details-marker{display:none}
+  .ts{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#64748b}
+  .badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;letter-spacing:.03em}
+  .evt-label,.evt-link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  .evt-label{color:#e2e8f0}
+  .evt-link{color:#818cf8;text-decoration:none}
+  .evt-link:hover{text-decoration:underline}
+  .sid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#64748b}
+  .evt-status{font-size:11px;color:#94a3b8}
+  .bodies{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 12px 12px}
+  .bodies .label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;margin:4px 0}
+  .bodies pre{background:#0f172a;color:#e2e8f0;border-radius:6px;padding:10px;font-size:11px;
+       line-height:1.5;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:0}
+</style>
+</head>
+<body>
+  <div style="max-width:960px;margin:0 auto">
+    <h1>\u{1F4E1} Communication Log</h1>
+    <p class="sub">Live feed of webhooks, API calls and OAuth traffic · <span id="status">connecting…</span></p>
+    <a class="back" href="/">← back to picker</a>
+  </div>
+  <div id="feed">
+    ${rows.map((r) => commRowHtml(r, completed)).join("")}
+  </div>
+<script>
+  const feed = document.getElementById("feed");
+  const statusEl = document.getElementById("status");
+  const es = new EventSource("/events");
+  es.onopen = () => { statusEl.textContent = "live"; };
+  es.onerror = () => { statusEl.textContent = "disconnected — retrying…"; };
+  es.onmessage = (e) => {
+    try {
+      const html = JSON.parse(e.data);
+      feed.insertAdjacentHTML("afterbegin", html);
+    } catch (err) {
+      console.error("bad event", err);
+    }
+  };
+</script>
 </body>
 </html>`;
