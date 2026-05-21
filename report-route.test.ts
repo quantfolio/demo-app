@@ -16,3 +16,8 @@ test("handleReport 404s for a missing session", () => {
   const res = handleReport("no-such-session");
   expect(res.status).toBe(404);
 });
+
+test("handleReport rejects a sessionId with invalid characters", () => {
+  const res = handleReport("../../etc/passwd");
+  expect(res.status).toBe(400);
+});
