@@ -3,10 +3,14 @@ import { DeepAlphaClient, DeepAlphaApiError } from "./public_api/client.ts";
 import {
     pickerPage,
     resultPage,
+    logPage,
+    commRowHtml,
     type ImaginaryClient,
     type ResultBlocks,
 } from "./templates.ts";
-import { listSessionsForInvestorEmail, recordOtherCall, recordSessionCall } from "./db.ts";
+import { listSessionsForInvestorEmail, recordOtherCall, recordSessionCall, listComm, completedSessionIds } from "./db.ts";
+import { subscribe } from "./comm-stream.ts";
+import { handleReport } from "./report.ts";
 
 const PORT = 9090;
 const OAUTH_PORT = 9091;
@@ -517,6 +521,46 @@ Bun.serve({
             return handleListener(req);
         }
 
+        // Communication log page
+        if (url.pathname === "/log") {
+            return new Response(logPage(listComm(), completedSessionIds()), {
+                headers: { "Content-Type": "text/html; charset=utf-8" },
+            });
+        }
+
+        // Live SSE feed of comm_log rows
+        if (url.pathname === "/events") {
+            let unsubscribe = () => {};
+            const stream = new ReadableStream({
+                start(controller) {
+                    const enc = new TextEncoder();
+                    unsubscribe = subscribe((row) => {
+                        try {
+                            const html = commRowHtml(row, completedSessionIds());
+                            controller.enqueue(enc.encode(`data: ${JSON.stringify(html)}\n\n`));
+                        } catch { /* client gone — cancel() will clean up */ }
+                    });
+                },
+                cancel() { unsubscribe(); },
+            });
+            return new Response(stream, {
+                headers: {
+                    "Content-Type": "text/event-stream",
+                    "Cache-Control": "no-cache",
+                    Connection: "keep-alive",
+                },
+            });
+        }
+
+        // Report PDF download
+        if (url.pathname === "/report") {
+            const sessionId = url.searchParams.get("session");
+            if (!sessionId) {
+                return new Response("Missing ?session=<id>", { status: 400 });
+            }
+            return handleReport(sessionId);
+        }
+
         // Mock SSO debug callback
         if (url.pathname === "/debug") {
             const code = url.searchParams.get("code");
@@ -609,6 +653,7 @@ console.log(`Discovery:   ${PUBLIC_ISSUER_URL}/.well-known/openid-configuration`
 console.log(`Tenant:      https://api.test.deepalpha.dev`);
 console.log(`Client ID:   ${CLIENT_ID}`);
 console.log("Routes:      GET / | GET /pick?user=N | POST /session | POST /listener");
+console.log("             GET /log | GET /events | GET /report?session=ID");
 console.log("             GET /login | GET /authorize | GET /debug | * → mock OAuth");
 console.log("\nUsers:");
 USERS.forEach((u, i) => console.log(`  [${i}] ${u.name} <${u.email}> roles=${u.roles.join(",")}`));
