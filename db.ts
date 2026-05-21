@@ -1,8 +1,33 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { publish } from "./comm-stream.ts";
 
-const DB_PATH = "data/qap.sqlite";
+export type CommKind = "webhook_in" | "api_out" | "oauth";
+
+export interface CommLogRow {
+  id: number;
+  kind: CommKind;
+  label: string;
+  session_id: string | null;
+  status: string | null;
+  request_body: string | null;
+  response_body: string | null;
+  meta: string | null;
+  timestamp: string;
+}
+
+export interface CommEntry {
+  kind: CommKind;
+  label: string;
+  sessionId?: string;
+  status?: string | number;
+  requestBody?: unknown;
+  responseBody?: unknown;
+  meta?: Record<string, unknown>;
+}
+
+const DB_PATH = Bun.env.QAP_DB_PATH ?? "data/qap.sqlite";
 
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
@@ -33,6 +58,19 @@ db.exec(`
     ON other_api_calls(advisor_id);
   CREATE INDEX IF NOT EXISTS idx_other_api_calls_investor
     ON other_api_calls(investor_id);
+
+  CREATE TABLE IF NOT EXISTS comm_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL,
+    label         TEXT NOT NULL,
+    session_id    TEXT,
+    status        TEXT,
+    request_body  TEXT,
+    response_body TEXT,
+    meta          TEXT,
+    timestamp     TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_comm_log_session ON comm_log(session_id);
 `);
 
 const insertSession = db.prepare(`
@@ -45,6 +83,27 @@ const insertOther = db.prepare(`
   INSERT INTO other_api_calls
     (advisor_id, investor_id, api_endpoint, request_body, response_body, timestamp)
   VALUES (?, ?, ?, ?, ?, ?)
+`);
+
+const insertComm = db.prepare(`
+  INSERT INTO comm_log
+    (kind, label, session_id, status, request_body, response_body, meta, timestamp)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  RETURNING id, kind, label, session_id, status, request_body, response_body, meta, timestamp
+`);
+
+const selectComm = db.prepare(`
+  SELECT id, kind, label, session_id, status, request_body, response_body, meta, timestamp
+  FROM comm_log
+  ORDER BY id DESC
+  LIMIT ?
+`);
+
+const selectCompletedSessions = db.prepare(`
+  SELECT DISTINCT session_id FROM comm_log
+  WHERE kind = 'webhook_in'
+    AND label = 'qap.advice_session.completed'
+    AND session_id IS NOT NULL
 `);
 
 const selectSessionsForInvestorEmail = db.prepare(`
@@ -133,6 +192,7 @@ export function recordSessionCall(
   apiEndpoint: string,
   requestBody: unknown,
   responseBody: unknown,
+  meta?: Record<string, unknown>,
 ): void {
   try {
     insertSession.run(
@@ -145,6 +205,14 @@ export function recordSessionCall(
   } catch (e) {
     console.error("[db] recordSessionCall failed:", e);
   }
+  logComm({
+    kind: "api_out",
+    label: apiEndpoint,
+    sessionId,
+    requestBody,
+    responseBody,
+    meta,
+  });
 }
 
 export function recordOtherCall(
@@ -152,6 +220,7 @@ export function recordOtherCall(
   apiEndpoint: string,
   requestBody: unknown,
   responseBody: unknown,
+  meta?: Record<string, unknown>,
 ): void {
   try {
     insertOther.run(
@@ -164,5 +233,52 @@ export function recordOtherCall(
     );
   } catch (e) {
     console.error("[db] recordOtherCall failed:", e);
+  }
+  logComm({
+    kind: "api_out",
+    label: apiEndpoint,
+    requestBody,
+    responseBody,
+    meta,
+  });
+}
+
+export function logComm(entry: CommEntry): void {
+  try {
+    const sessionId =
+      entry.sessionId ??
+      ((entry.responseBody as { session_id?: string } | null | undefined)?.session_id ?? null);
+    const row = insertComm.get(
+      entry.kind,
+      entry.label,
+      sessionId,
+      entry.status === undefined ? null : String(entry.status),
+      stringifyOrNull(entry.requestBody),
+      entry.responseBody === undefined ? null : JSON.stringify(entry.responseBody),
+      entry.meta === undefined ? null : JSON.stringify(entry.meta),
+      new Date().toISOString(),
+    ) as CommLogRow;
+    publish(row);
+  } catch (e) {
+    console.error("[db] logComm failed:", e);
+  }
+}
+
+export function listComm(limit = 200): CommLogRow[] {
+  try {
+    return selectComm.all(limit) as CommLogRow[];
+  } catch (e) {
+    console.error("[db] listComm failed:", e);
+    return [];
+  }
+}
+
+export function completedSessionIds(): Set<string> {
+  try {
+    const rows = selectCompletedSessions.all() as Array<{ session_id: string }>;
+    return new Set(rows.map((r) => r.session_id));
+  } catch (e) {
+    console.error("[db] completedSessionIds failed:", e);
+    return new Set();
   }
 }

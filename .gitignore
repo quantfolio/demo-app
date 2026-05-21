@@ -10,3 +10,4 @@ bun.lockb
 *.json
 data/
 .superpowers/
+docs/

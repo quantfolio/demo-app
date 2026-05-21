@@ -3,10 +3,15 @@ import { DeepAlphaClient, DeepAlphaApiError } from "./public_api/client.ts";
 import {
     pickerPage,
     resultPage,
+    logPage,
+    dashboardPage,
+    commRowHtml,
     type ImaginaryClient,
     type ResultBlocks,
 } from "./templates.ts";
-import { listSessionsForInvestorEmail, recordOtherCall, recordSessionCall } from "./db.ts";
+import { listSessionsForInvestorEmail, recordOtherCall, recordSessionCall, listComm, completedSessionIds, logComm } from "./db.ts";
+import { subscribe } from "./comm-stream.ts";
+import { handleReport } from "./report.ts";
 
 const PORT = 9090;
 const OAUTH_PORT = 9091;
@@ -313,17 +318,19 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
             session_id?: string;
             links?: unknown;
         };
+        const rawLink = pickFirstUrl(created.links);
+        const sessionUrl = rawLink
+            ? rewriteHost(rawLink)
+            : `https://${SESSION_HOST}/?session_id=${created.session_id ?? ""}`;
+
         recordOtherCall(
             { advisorId, investorId },
             "POST /v1/state_session",
             createSessionReq,
             created,
+            { sessionUrl },
         );
 
-        const rawLink = pickFirstUrl(created.links);
-        const sessionUrl = rawLink
-            ? rewriteHost(rawLink)
-            : `https://${SESSION_HOST}/?session_id=${created.session_id ?? ""}`;
         console.log(`[session] created session_id=${created.session_id}, url=${sessionUrl}`);
 
         return Response.json({
@@ -467,7 +474,16 @@ async function handleListener(req: Request): Promise<Response> {
     };
     console.log("[listener]", JSON.stringify(echo, null, 2));
 
-    const event = body as WebhookEvent | null;
+    const webhookEvent = body as WebhookEvent | null;
+    logComm({
+        kind: "webhook_in",
+        label: webhookEvent?.type ?? "(webhook)",
+        sessionId: typeof webhookEvent?.object_id === "string" ? webhookEvent.object_id : undefined,
+        requestBody: { headers: echo.headers, body },
+        responseBody: { received: true },
+    });
+
+    const event = webhookEvent;
     if (
         event?.type === "qap.advice_session.completed" &&
         typeof event.object_id === "string" &&
@@ -492,8 +508,15 @@ Bun.serve({
     async fetch(req: Request) {
         const url = new URL(req.url);
 
-        // Demo home — select-and-lookup picker
+        // Demo home — two-pane dashboard (picker left, comm log right)
         if (url.pathname === "/") {
+            return new Response(dashboardPage(), {
+                headers: { "Content-Type": "text/html; charset=utf-8" },
+            });
+        }
+
+        // Standalone picker — hosted in the dashboard's left pane
+        if (url.pathname === "/picker") {
             return new Response(pickerPage(USERS), {
                 headers: { "Content-Type": "text/html; charset=utf-8" },
             });
@@ -515,6 +538,51 @@ Bun.serve({
 
         if (url.pathname === "/listener" && req.method === "POST") {
             return handleListener(req);
+        }
+
+        // Communication log page
+        if (url.pathname === "/log") {
+            return new Response(logPage(listComm(), completedSessionIds()), {
+                headers: { "Content-Type": "text/html; charset=utf-8" },
+            });
+        }
+
+        // Live SSE feed of comm_log rows
+        if (url.pathname === "/events") {
+            let unsubscribe = () => {};
+            const stream = new ReadableStream({
+                start(controller) {
+                    const enc = new TextEncoder();
+                    unsubscribe = subscribe((row) => {
+                        try {
+                            const html = commRowHtml(row, completedSessionIds());
+                            const payload = `data: ${JSON.stringify(html)}\n\n`;
+                            try {
+                                controller.enqueue(enc.encode(payload));
+                            } catch { /* client disconnected — cancel() will clean up */ }
+                        } catch (e) {
+                            console.error("[events] failed to render comm row:", e);
+                        }
+                    });
+                },
+                cancel() { unsubscribe(); },
+            });
+            return new Response(stream, {
+                headers: {
+                    "Content-Type": "text/event-stream",
+                    "Cache-Control": "no-cache",
+                    Connection: "keep-alive",
+                },
+            });
+        }
+
+        // Report PDF download
+        if (url.pathname === "/report") {
+            const sessionId = url.searchParams.get("session");
+            if (!sessionId) {
+                return new Response("Missing ?session=<id>", { status: 400 });
+            }
+            return handleReport(sessionId);
         }
 
         // Mock SSO debug callback
@@ -550,6 +618,11 @@ Bun.serve({
 
         // Mock SSO login
         if (url.pathname === "/login") {
+            logComm({
+                kind: "oauth",
+                label: `${req.method} /login`,
+                requestBody: Object.fromEntries(url.searchParams),
+            });
             const params = new URLSearchParams(url.search);
             if (!params.has("redirect_uri")) {
                 params.set("redirect_uri", `${url.origin}/debug`);
@@ -592,12 +665,26 @@ Bun.serve({
         target.hostname = "localhost";
         target.port = String(OAUTH_PORT);
 
-        return fetch(target.toString(), {
+        const proxiedRes = await fetch(target.toString(), {
             method: req.method,
             headers: req.headers,
             body: req.body,
             redirect: "manual",
         });
+
+        let oauthResponseBody: unknown = null;
+        try {
+            oauthResponseBody = await proxiedRes.clone().text();
+        } catch { /* leave null */ }
+        logComm({
+            kind: "oauth",
+            label: `${req.method} ${url.pathname}`,
+            status: proxiedRes.status,
+            requestBody: Object.fromEntries(url.searchParams),
+            responseBody: oauthResponseBody,
+        });
+
+        return proxiedRes;
     },
 });
 
@@ -609,6 +696,7 @@ console.log(`Discovery:   ${PUBLIC_ISSUER_URL}/.well-known/openid-configuration`
 console.log(`Tenant:      https://api.test.deepalpha.dev`);
 console.log(`Client ID:   ${CLIENT_ID}`);
 console.log("Routes:      GET / | GET /pick?user=N | POST /session | POST /listener");
+console.log("             GET /log | GET /events | GET /report?session=ID");
 console.log("             GET /login | GET /authorize | GET /debug | * → mock OAuth");
 console.log("\nUsers:");
 USERS.forEach((u, i) => console.log(`  [${i}] ${u.name} <${u.email}> roles=${u.roles.join(",")}`));
