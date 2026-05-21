@@ -8,7 +8,7 @@ import {
     type ImaginaryClient,
     type ResultBlocks,
 } from "./templates.ts";
-import { listSessionsForInvestorEmail, recordOtherCall, recordSessionCall, listComm, completedSessionIds } from "./db.ts";
+import { listSessionsForInvestorEmail, recordOtherCall, recordSessionCall, listComm, completedSessionIds, logComm } from "./db.ts";
 import { subscribe } from "./comm-stream.ts";
 import { handleReport } from "./report.ts";
 
@@ -317,17 +317,19 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
             session_id?: string;
             links?: unknown;
         };
+        const rawLink = pickFirstUrl(created.links);
+        const sessionUrl = rawLink
+            ? rewriteHost(rawLink)
+            : `https://${SESSION_HOST}/?session_id=${created.session_id ?? ""}`;
+
         recordOtherCall(
             { advisorId, investorId },
             "POST /v1/state_session",
             createSessionReq,
             created,
+            { sessionUrl },
         );
 
-        const rawLink = pickFirstUrl(created.links);
-        const sessionUrl = rawLink
-            ? rewriteHost(rawLink)
-            : `https://${SESSION_HOST}/?session_id=${created.session_id ?? ""}`;
         console.log(`[session] created session_id=${created.session_id}, url=${sessionUrl}`);
 
         return Response.json({
@@ -471,7 +473,16 @@ async function handleListener(req: Request): Promise<Response> {
     };
     console.log("[listener]", JSON.stringify(echo, null, 2));
 
-    const event = body as WebhookEvent | null;
+    const webhookEvent = body as WebhookEvent | null;
+    logComm({
+        kind: "webhook_in",
+        label: webhookEvent?.type ?? "(webhook)",
+        sessionId: typeof webhookEvent?.object_id === "string" ? webhookEvent.object_id : undefined,
+        requestBody: { headers: echo.headers, body },
+        responseBody: { received: true },
+    });
+
+    const event = webhookEvent;
     if (
         event?.type === "qap.advice_session.completed" &&
         typeof event.object_id === "string" &&
@@ -495,6 +506,14 @@ Bun.serve({
     port: PORT,
     async fetch(req: Request) {
         const url = new URL(req.url);
+
+        if (url.pathname === "/authorize" || url.pathname === "/login") {
+            logComm({
+                kind: "oauth",
+                label: `${req.method} ${url.pathname}`,
+                requestBody: Object.fromEntries(url.searchParams),
+            });
+        }
 
         // Demo home — select-and-lookup picker
         if (url.pathname === "/") {
@@ -636,12 +655,25 @@ Bun.serve({
         target.hostname = "localhost";
         target.port = String(OAUTH_PORT);
 
-        return fetch(target.toString(), {
+        const proxiedRes = await fetch(target.toString(), {
             method: req.method,
             headers: req.headers,
             body: req.body,
             redirect: "manual",
         });
+
+        let oauthResponseBody: unknown = null;
+        try {
+            oauthResponseBody = await proxiedRes.clone().text();
+        } catch { /* leave null */ }
+        logComm({
+            kind: "oauth",
+            label: `${req.method} ${url.pathname}`,
+            status: proxiedRes.status,
+            responseBody: oauthResponseBody,
+        });
+
+        return proxiedRes;
     },
 });
 
