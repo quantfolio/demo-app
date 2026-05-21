@@ -507,14 +507,6 @@ Bun.serve({
     async fetch(req: Request) {
         const url = new URL(req.url);
 
-        if (url.pathname === "/authorize" || url.pathname === "/login") {
-            logComm({
-                kind: "oauth",
-                label: `${req.method} ${url.pathname}`,
-                requestBody: Object.fromEntries(url.searchParams),
-            });
-        }
-
         // Demo home — select-and-lookup picker
         if (url.pathname === "/") {
             return new Response(pickerPage(USERS), {
@@ -556,8 +548,13 @@ Bun.serve({
                     unsubscribe = subscribe((row) => {
                         try {
                             const html = commRowHtml(row, completedSessionIds());
-                            controller.enqueue(enc.encode(`data: ${JSON.stringify(html)}\n\n`));
-                        } catch { /* client gone — cancel() will clean up */ }
+                            const payload = `data: ${JSON.stringify(html)}\n\n`;
+                            try {
+                                controller.enqueue(enc.encode(payload));
+                            } catch { /* client disconnected — cancel() will clean up */ }
+                        } catch (e) {
+                            console.error("[events] failed to render comm row:", e);
+                        }
                     });
                 },
                 cancel() { unsubscribe(); },
@@ -613,6 +610,11 @@ Bun.serve({
 
         // Mock SSO login
         if (url.pathname === "/login") {
+            logComm({
+                kind: "oauth",
+                label: `${req.method} /login`,
+                requestBody: Object.fromEntries(url.searchParams),
+            });
             const params = new URLSearchParams(url.search);
             if (!params.has("redirect_uri")) {
                 params.set("redirect_uri", `${url.origin}/debug`);
@@ -670,6 +672,7 @@ Bun.serve({
             kind: "oauth",
             label: `${req.method} ${url.pathname}`,
             status: proxiedRes.status,
+            requestBody: Object.fromEntries(url.searchParams),
             responseBody: oauthResponseBody,
         });
 
