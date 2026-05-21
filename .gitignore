@@ -9,3 +9,4 @@ bun.lockb
 *.pdf
 *.json
 data/
+docs/
