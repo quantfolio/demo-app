@@ -24,6 +24,7 @@ export interface ApiCallRow {
 export interface InvestorSessionRow {
     session_id: string;
     completed: boolean;
+    sessionUrl: string | null;
     calls: ApiCallRow[];
 }
 
@@ -164,6 +165,8 @@ export const resultPage = (r: ResultBlocks): string => /* html */ `<!DOCTYPE htm
   table.sessions tr.empty td{color:#9ca3af;font-style:italic}
   .pill.done{background:#d1fae5;color:#065f46}
   .pill.wip{background:#fef3c7;color:#92400e}
+  a.pill{text-decoration:none}
+  a.pill.wip:hover{background:#fde68a}
   .sid{margin-left:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#9ca3af}
   details.session-acc{margin:2px 0}
   details.session-acc > summary{cursor:pointer;list-style:none;padding:2px 0;outline:none}
@@ -228,7 +231,11 @@ export const resultPage = (r: ResultBlocks): string => /* html */ `<!DOCTYPE htm
                           <td>
                             <details class="session-acc">
                               <summary>
-                                <span class="pill ${s.completed ? "done" : "wip"}">${s.completed ? "completed" : "in progress"}</span>
+                                ${s.completed
+                                  ? `<span class="pill done">completed</span>`
+                                  : s.sessionUrl
+                                    ? `<a class="pill wip" href="${escapeHtml(s.sessionUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">in progress ↗</a>`
+                                    : `<span class="pill wip">in progress</span>`}
                                 <span class="sid">${escapeHtml(s.session_id.slice(0, 8))}…</span>
                               </summary>
                               <div class="calls">

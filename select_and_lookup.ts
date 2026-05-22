@@ -1,5 +1,6 @@
 import { OAuth2Server } from "oauth2-mock-server";
 import { DeepAlphaClient, DeepAlphaApiError } from "./public_api/client.ts";
+import { buildAccountPayload } from "./public_api/create-account.ts";
 import {
     pickerPage,
     resultPage,
@@ -306,6 +307,24 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
         } else {
             console.log(`[session] existing investor id=${investorId}`);
         }
+
+        // Give the investor an account before the session starts — whether the
+        // investor was just created or already existed in the system.
+        // If this POST fails it throws, the catch below returns an error,
+        // and createStateSession is never reached (session aborted).
+        console.log(`[session] POST /v1/investor/${investorId}/accounts`);
+        const createAccountReq = buildAccountPayload(investorId);
+        const createdAccount = await client.createInvestorAccount(
+            investorId,
+            createAccountReq,
+        );
+        recordOtherCall(
+            { advisorId, investorId },
+            "POST /v1/investor/{investor_id}/accounts",
+            createAccountReq,
+            createdAccount,
+        );
+        console.log(`[session] account created for investor ${investorId}`);
 
         console.log(`[session] POST /v1/state_session for investor ${investorId}`);
         const createSessionReq = {

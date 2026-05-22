@@ -112,7 +112,16 @@ const selectSessionsForInvestorEmail = db.prepare(`
     EXISTS (
       SELECT 1 FROM session_api_calls c
       WHERE c.session_id = json_extract(s.response_body, '$.session_id')
-    ) AS completed
+    ) AS completed,
+    (
+      SELECT json_extract(cl.meta, '$.sessionUrl')
+      FROM comm_log cl
+      WHERE cl.label = 'POST /v1/state_session'
+        AND cl.session_id = json_extract(s.response_body, '$.session_id')
+        AND json_extract(cl.meta, '$.sessionUrl') IS NOT NULL
+      ORDER BY cl.id DESC
+      LIMIT 1
+    ) AS session_url
   FROM other_api_calls s
   WHERE s.api_endpoint = 'POST /v1/state_session'
     AND s.advisor_id = ?
@@ -153,6 +162,7 @@ export interface ApiCallRow {
 export interface InvestorSessionRow {
   session_id: string;
   completed: boolean;
+  sessionUrl: string | null;
   calls: ApiCallRow[];
 }
 
@@ -170,10 +180,12 @@ export function listSessionsForInvestorEmail(
     ) as Array<{
       session_id: string;
       completed: number;
+      session_url: string | null;
     }>;
     return sessions.map((s) => ({
       session_id: s.session_id,
       completed: s.completed === 1,
+      sessionUrl: s.session_url ?? null,
       calls: selectApiCallsForSession.all(s.session_id) as ApiCallRow[],
     }));
   } catch (e) {
