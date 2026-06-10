@@ -17,7 +17,7 @@ import { handleReport } from "./report.ts";
 const PORT = 9090;
 const OAUTH_PORT = 9091;
 const PUBLIC_ISSUER_URL = Bun.env.PUBLIC_ISSUER_URL ?? `http://localhost:${PORT}`;
-const SESSION_HOST = Bun.env.SESSION_HOST ?? "qf-employee-bjornar.test.deepalpha.dev";
+const SESSION_HOST = Bun.env.SESSION_HOST ?? "";
 
 const CLIENT_ID = Bun.env.CLIENT_ID;
 const CLIENT_SECRET = Bun.env.CLIENT_SECRET;
