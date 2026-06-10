@@ -408,6 +408,38 @@ async function fetchSessionBundle(sessionId: string) {
         getAdviceTransactionsRes,
     );
 
+    const getFinancialSituationRes = await client.getFinancialSituation(sessionId);
+    recordSessionCall(
+        sessionId,
+        "GET /v2/advice_session/{session_id}/financial_situation",
+        { sessionId },
+        getFinancialSituationRes,
+    );
+
+    const getRiskQuestionRes = await client.getRiskQuestion(sessionId);
+    recordSessionCall(
+        sessionId,
+        "GET /v2/advice_session/{session_id}/risk_question",
+        { sessionId },
+        getRiskQuestionRes,
+    );
+
+    const getSustainabilityRes = await client.getSustainability(sessionId);
+    recordSessionCall(
+        sessionId,
+        "GET /v2/advice_session/{session_id}/sustainability",
+        { sessionId },
+        getSustainabilityRes,
+    );
+
+    const getKnowledgeAndExperienceRes = await client.getKnowledgeAndExperience(sessionId);
+    recordSessionCall(
+        sessionId,
+        "GET /v2/advice_session/{session_id}/knowledge_and_experience",
+        { sessionId },
+        getKnowledgeAndExperienceRes,
+    );
+
     const goalItems: unknown[] = Array.isArray(listAdviceGoalsRes)
         ? listAdviceGoalsRes
         : (listAdviceGoalsRes as { data?: unknown[]; goals?: unknown[] })?.data
@@ -429,7 +461,16 @@ async function fetchSessionBundle(sessionId: string) {
                 { sessionId, goalId },
                 detail,
             );
-            return { goal_id: goalId, detail };
+
+            const information = await client.getGoalInformation(sessionId, goalId);
+            recordSessionCall(
+                sessionId,
+                "GET /v2/advice_session/{session_id}/goal/{goal_id}/information",
+                { sessionId, goalId },
+                information,
+            );
+
+            return { goal_id: goalId, detail, information };
         }),
     );
 
@@ -439,6 +480,10 @@ async function fetchSessionBundle(sessionId: string) {
         goals: listAdviceGoalsRes,
         goal_details: goalDetails,
         transactions: getAdviceTransactionsRes,
+        financial_situation: getFinancialSituationRes,
+        risk_question: getRiskQuestionRes,
+        sustainability: getSustainabilityRes,
+        knowledge_and_experience: getKnowledgeAndExperienceRes,
     };
 }
 

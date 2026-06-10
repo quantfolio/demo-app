@@ -829,9 +829,55 @@ export class DeepAlphaClient {
     return this.request("GET", path, { query, reqOpts });
   }
 
+  /** GET /v2/advice_session/{session_id}/goal/{goal_id}/information */
+  getGoalInformation(
+    sessionId: string,
+    goalId: string,
+    query?: { language?: Language },
+    reqOpts?: RequestOptions,
+  ) {
+    const path = fillPath("/v2/advice_session/{session_id}/goal/{goal_id}/information", {
+      session_id: sessionId,
+      goal_id: goalId,
+    });
+    return this.request("GET", path, { query, reqOpts });
+  }
+
   /** GET /v2/advice_session/{session_id}/transactions */
   getAdviceTransactions(sessionId: string, reqOpts?: RequestOptions) {
     const path = fillPath("/v2/advice_session/{session_id}/transactions", {
+      session_id: sessionId,
+    });
+    return this.request("GET", path, { reqOpts });
+  }
+
+  /** GET /v2/advice_session/{session_id}/financial_situation */
+  getFinancialSituation(sessionId: string, reqOpts?: RequestOptions) {
+    const path = fillPath("/v2/advice_session/{session_id}/financial_situation", {
+      session_id: sessionId,
+    });
+    return this.request("GET", path, { reqOpts });
+  }
+
+  /** GET /v2/advice_session/{session_id}/risk_question */
+  getRiskQuestion(sessionId: string, reqOpts?: RequestOptions) {
+    const path = fillPath("/v2/advice_session/{session_id}/risk_question", {
+      session_id: sessionId,
+    });
+    return this.request("GET", path, { reqOpts });
+  }
+
+  /** GET /v2/advice_session/{session_id}/sustainability */
+  getSustainability(sessionId: string, reqOpts?: RequestOptions) {
+    const path = fillPath("/v2/advice_session/{session_id}/sustainability", {
+      session_id: sessionId,
+    });
+    return this.request("GET", path, { reqOpts });
+  }
+
+  /** GET /v2/advice_session/{session_id}/knowledge_and_experience */
+  getKnowledgeAndExperience(sessionId: string, reqOpts?: RequestOptions) {
+    const path = fillPath("/v2/advice_session/{session_id}/knowledge_and_experience", {
       session_id: sessionId,
     });
     return this.request("GET", path, { reqOpts });
