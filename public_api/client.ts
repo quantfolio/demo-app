@@ -71,7 +71,7 @@ export type StateInvestorPayload = Record<string, Json>;
 export type UpdateStateInvestorPayload = Record<string, Json>;
 export type AccountPayload = Record<string, Json>;
 export type InvestorSearchPayload = Record<string, Json>;
-export type CreateStateSessionPayload = Record<string, Json>;
+export type SessionCreateRequestSchemaV2 = Record<string, Json>;
 export type UpdateSessionStatusPayload = Record<string, Json>;
 export type DownloadReportInputSchema = Record<string, Json>;
 export type BulkStateInvestorsPayload = Record<string, Json>;
@@ -528,11 +528,6 @@ export class DeepAlphaClient {
     return this.request("PATCH", path, { body, reqOpts });
   }
 
-  /** POST /v1/state_session */
-  createStateSession(body: CreateStateSessionPayload, reqOpts?: RequestOptions) {
-    return this.request("POST", "/v1/state_session", { body, reqOpts });
-  }
-
   /** DELETE /v1/session/{session_id} (soft delete) */
   deleteSession(sessionId: string, reqOpts?: RequestOptions) {
     const path = fillPath("/v1/session/{session_id}", { session_id: sessionId });
@@ -758,6 +753,11 @@ export class DeepAlphaClient {
   // ===========================================================================
   // Advice sessions (v2)
   // ===========================================================================
+
+  /** POST /v2/advice_session — start a new advice session for an existing investor */
+  createAdviceSession(body: SessionCreateRequestSchemaV2, reqOpts?: RequestOptions) {
+    return this.request("POST", "/v2/advice_session", { body, reqOpts });
+  }
 
   /** GET /v2/advice_session */
   listAdviceSessions(

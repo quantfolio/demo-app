@@ -343,7 +343,7 @@ const metaValue = (meta: string | null, key: string): string | undefined => {
 const labelCell = (row: CommLogRow, completed: Set<string>): string => {
   const text = escapeHtml(row.label);
   if (
-    row.label === "POST /v1/state_session" &&
+    row.label === "POST /v2/advice_session" &&
     row.session_id &&
     !completed.has(row.session_id)
   ) {

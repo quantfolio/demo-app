@@ -237,17 +237,6 @@ function rewriteHost(rawUrl: string): string {
     }
 }
 
-function pickFirstUrl(value: unknown): string | undefined {
-    if (typeof value === "string" && /^https?:\/\//.test(value)) return value;
-    if (value && typeof value === "object") {
-        for (const v of Object.values(value as Record<string, unknown>)) {
-            const found = pickFirstUrl(v);
-            if (found) return found;
-        }
-    }
-    return undefined;
-}
-
 interface SessionRequestBody {
     advisorId?: string;
     name?: string;
@@ -311,7 +300,7 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
         // Give the investor an account before the session starts — whether the
         // investor was just created or already existed in the system.
         // If this POST fails it throws, the catch below returns an error,
-        // and createStateSession is never reached (session aborted).
+        // and createAdviceSession is never reached (session aborted).
         console.log(`[session] POST /v1/investor/${investorId}/accounts`);
         const createAccountReq = buildAccountPayload(investorId);
         const createdAccount = await client.createInvestorAccount(
@@ -326,35 +315,54 @@ async function handleCreateSession(body: SessionRequestBody): Promise<Response> 
         );
         console.log(`[session] account created for investor ${investorId}`);
 
-        console.log(`[session] POST /v1/state_session for investor ${investorId}`);
+        console.log(`[session] POST /v2/advice_session for investor ${investorId}`);
         const createSessionReq = {
             advisor_id: advisorId,
             investor_id: investorId,
             name: `Session for ${name} @ ${new Date().toISOString()}`,
-            advice_type: "MiFIID II investment Advice",
+            // v2 requires an enum value (v1 accepted free-form text).
+            advice_type: "mifid",
         };
-        const created = (await client.createStateSession(createSessionReq as never)) as {
-            session_id?: string;
-            links?: unknown;
+        // v2 wraps the session in `data`. Unlike v1's `links.web`, the create
+        // response has no entry link — `redirect_url` is a caller-supplied
+        // post-completion return URL that the API just echoes back (null here).
+        const created = (await client.createAdviceSession(createSessionReq as never)) as {
+            data?: { session_id?: string };
         };
-        const rawLink = pickFirstUrl(created.links);
+        const sessionId = created.data?.session_id;
+
+        // The session entry link lives on the detail endpoint
+        // (data.links.advice_information — the v2 equivalent of v1's links.web).
+        let rawLink: string | undefined;
+        if (sessionId) {
+            const detail = (await client.getAdviceSession(sessionId)) as {
+                data?: { links?: { advice_information?: string | null } };
+            };
+            recordSessionCall(
+                sessionId,
+                "GET /v2/advice_session/{session_id}",
+                { sessionId },
+                detail,
+            );
+            rawLink = detail.data?.links?.advice_information ?? undefined;
+        }
         const sessionUrl = rawLink
             ? rewriteHost(rawLink)
-            : `https://${SESSION_HOST}/?session_id=${created.session_id ?? ""}`;
+            : `https://${SESSION_HOST}/?session_id=${sessionId ?? ""}`;
 
         recordOtherCall(
             { advisorId, investorId },
-            "POST /v1/state_session",
+            "POST /v2/advice_session",
             createSessionReq,
             created,
             { sessionUrl },
         );
 
-        console.log(`[session] created session_id=${created.session_id}, url=${sessionUrl}`);
+        console.log(`[session] created session_id=${sessionId}, url=${sessionUrl}`);
 
         return Response.json({
             status: "ok",
-            sessionId: created.session_id,
+            sessionId,
             sessionUrl,
             investorCreated: createdInvestor !== undefined,
             rawResponse: created,

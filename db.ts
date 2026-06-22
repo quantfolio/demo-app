@@ -108,24 +108,24 @@ const selectCompletedSessions = db.prepare(`
 
 const selectSessionsForInvestorEmail = db.prepare(`
   SELECT
-    json_extract(s.response_body, '$.session_id') AS session_id,
+    json_extract(s.response_body, '$.data.session_id') AS session_id,
     EXISTS (
       SELECT 1 FROM session_api_calls c
-      WHERE c.session_id = json_extract(s.response_body, '$.session_id')
+      WHERE c.session_id = json_extract(s.response_body, '$.data.session_id')
     ) AS completed,
     (
       SELECT json_extract(cl.meta, '$.sessionUrl')
       FROM comm_log cl
-      WHERE cl.label = 'POST /v1/state_session'
-        AND cl.session_id = json_extract(s.response_body, '$.session_id')
+      WHERE cl.label = 'POST /v2/advice_session'
+        AND cl.session_id = json_extract(s.response_body, '$.data.session_id')
         AND json_extract(cl.meta, '$.sessionUrl') IS NOT NULL
       ORDER BY cl.id DESC
       LIMIT 1
     ) AS session_url
   FROM other_api_calls s
-  WHERE s.api_endpoint = 'POST /v1/state_session'
+  WHERE s.api_endpoint = 'POST /v2/advice_session'
     AND s.advisor_id = ?
-    AND json_extract(s.response_body, '$.session_id') IS NOT NULL
+    AND json_extract(s.response_body, '$.data.session_id') IS NOT NULL
     AND s.investor_id IN (
       SELECT json_extract(response_body, '$.id')
       FROM other_api_calls
@@ -257,9 +257,12 @@ export function recordOtherCall(
 
 export function logComm(entry: CommEntry): void {
   try {
+    const body = entry.responseBody as
+      | { session_id?: string; data?: { session_id?: string } }
+      | null
+      | undefined;
     const sessionId =
-      entry.sessionId ??
-      ((entry.responseBody as { session_id?: string } | null | undefined)?.session_id ?? null);
+      entry.sessionId ?? body?.session_id ?? body?.data?.session_id ?? null;
     const row = insertComm.get(
       entry.kind,
       entry.label,

@@ -16,8 +16,8 @@ test("listComm honours the limit argument", () => {
   expect(listComm(1).length).toBe(1);
 });
 
-test("logComm derives session_id from a responseBody.session_id", () => {
-  logComm({ kind: "api_out", label: "POST /v1/state_session", responseBody: { session_id: "s2" } });
+test("logComm derives session_id from a v2 responseBody.data.session_id", () => {
+  logComm({ kind: "api_out", label: "POST /v2/advice_session", responseBody: { data: { session_id: "s2" } } });
   expect(listComm(1)[0]!.session_id).toBe("s2");
 });
 
@@ -37,8 +37,8 @@ test("recordSessionCall also writes an api_out comm_log row", async () => {
 
 test("recordOtherCall also writes an api_out comm_log row with meta", async () => {
   const { recordOtherCall } = await import("./db.ts");
-  recordOtherCall({ advisorId: "adv1" }, "POST /v1/state_session",
-    { req: 1 }, { session_id: "s3" }, { sessionUrl: "https://example.test/s3" });
+  recordOtherCall({ advisorId: "adv1" }, "POST /v2/advice_session",
+    { req: 1 }, { data: { session_id: "s3" } }, { sessionUrl: "https://example.test/s3" });
   const row = listComm(1)[0]!;
   expect(row.kind).toBe("api_out");
   expect(row.session_id).toBe("s3");
@@ -61,8 +61,8 @@ test("commRowHtml renders an expandable api_out row", async () => {
 test("commRowHtml links an incomplete session-create row to its sessionUrl", async () => {
   const { commRowHtml } = await import("./templates.ts");
   const html = commRowHtml(
-    { id: 2, kind: "api_out", label: "POST /v1/state_session", session_id: "live1",
-      status: null, request_body: null, response_body: '{"session_id":"live1"}',
+    { id: 2, kind: "api_out", label: "POST /v2/advice_session", session_id: "live1",
+      status: null, request_body: null, response_body: '{"data":{"session_id":"live1"}}',
       meta: '{"sessionUrl":"https://session.test/live1"}', timestamp: "2026-05-21T00:00:00.000Z" },
     new Set<string>(),
   );
@@ -73,8 +73,8 @@ test("commRowHtml links an incomplete session-create row to its sessionUrl", asy
 test("commRowHtml does not link a completed session-create row", async () => {
   const { commRowHtml } = await import("./templates.ts");
   const html = commRowHtml(
-    { id: 3, kind: "api_out", label: "POST /v1/state_session", session_id: "done1",
-      status: null, request_body: null, response_body: '{"session_id":"done1"}',
+    { id: 3, kind: "api_out", label: "POST /v2/advice_session", session_id: "done1",
+      status: null, request_body: null, response_body: '{"data":{"session_id":"done1"}}',
       meta: '{"sessionUrl":"https://session.test/done1"}', timestamp: "2026-05-21T00:00:00.000Z" },
     new Set<string>(["done1"]),
   );
